@@ -1,0 +1,245 @@
+{
+  "id": "invoice_to_archive",
+  "name": "Invoice-to-Archive",
+  "description": "Erkennt neue Eingangsrechnungen per E-Mail oder Webhook, extrahiert Daten per AI (Betrag, Datum, Lieferant, Steuernummer), prüft auf Duplikate, fordert Freigabe bei Beträgen über Schwellenwert an, archiviert in Google Drive / S3 und schreibt Buchhaltungseintrag. EU AI Act Art. 50: KI-Extraktion wird im Dokument-Metadaten vermerkt.",
+  "version": "1.0.0",
+  "eu_risk_level": "limited",
+  "eu_ai_act_notes": "Automatisierte Dokumentenverarbeitung mit Finanzrelevanz. Transparenzpflicht gem. Art. 50. Menschliche Freigabe ab Schwellenwert Pflicht.",
+  "target_audience": "KMU Deutschland — Buchhaltung / Geschäftsführung",
+  "tags": ["finance", "archive", "invoice", "compliance", "kmu"],
+  "trigger": {
+    "type": "multi",
+    "sources": [
+      {
+        "type": "email_inbox",
+        "config": {
+          "mailbox": "rechnungen@{{context.tenant_domain}}",
+          "filter_subject": ["Rechnung", "Invoice", "RE-", "RG-"],
+          "attachment_types": ["pdf", "xml", "zugferd"],
+          "poll_interval_seconds": 300
+        }
+      },
+      {
+        "type": "webhook",
+        "config": {
+          "path": "/webhooks/invoice",
+          "method": "POST",
+          "auth": "hmac_sha256"
+        }
+      }
+    ]
+  },
+  "timeout_seconds": 600,
+  "steps": [
+    {
+      "id": "step_1_extract_invoice_data",
+      "name": "Rechnungsdaten extrahieren",
+      "type": "ai_extract",
+      "config": {
+        "model": "gpt-4o",
+        "input": "{{trigger.attachment_base64 || trigger.body}}",
+        "input_type": "{{trigger.attachment_mime || 'text/plain'}}",
+        "schema": {
+          "invoice_number":   { "type": "string",  "description": "Rechnungsnummer" },
+          "invoice_date":     { "type": "string",  "format": "date", "description": "Rechnungsdatum ISO 8601" },
+          "due_date":         { "type": "string",  "format": "date", "description": "Fälligkeitsdatum" },
+          "vendor_name":      { "type": "string",  "description": "Lieferantenname" },
+          "vendor_tax_id":    { "type": "string",  "description": "USt-IdNr. des Lieferanten" },
+          "vendor_iban":      { "type": "string",  "description": "IBAN des Lieferanten" },
+          "net_amount_eur":   { "type": "number",  "description": "Nettobetrag in EUR" },
+          "tax_amount_eur":   { "type": "number",  "description": "Steuerbetrag in EUR" },
+          "gross_amount_eur": { "type": "number",  "description": "Bruttobetrag in EUR" },
+          "tax_rate_pct":     { "type": "number",  "description": "Steuersatz in %" },
+          "currency":         { "type": "string",  "default": "EUR" },
+          "line_items":       { "type": "array",   "description": "Positionen mit Beschreibung + Betrag" },
+          "payment_terms":    { "type": "string",  "description": "Zahlungsbedingungen" },
+          "cost_center":      { "type": "string",  "description": "Kostenstelle (falls erkennbar)" }
+        },
+        "confidence_threshold": 0.85,
+        "temperature": 0.1,
+        "max_tokens": 1000
+      },
+      "output_var": "invoice_data",
+      "on_failure": "human_review",
+      "eu_ai_act": {
+        "transparency_label": true,
+        "log_model_used": true,
+        "confidence_in_output": true
+      }
+    },
+    {
+      "id": "step_2_duplicate_check",
+      "name": "Duplikat-Prüfung",
+      "type": "db_query",
+      "depends_on": ["step_1_extract_invoice_data"],
+      "config": {
+        "query": "SELECT id, created_at FROM invoices WHERE tenant_id = $1 AND invoice_number = $2 AND vendor_name = $3 LIMIT 1",
+        "params": ["{{context.tenant_id}}", "{{invoice_data.invoice_number}}", "{{invoice_data.vendor_name}}"]
+      },
+      "output_var": "duplicate_result"
+    },
+    {
+      "id": "step_3_abort_if_duplicate",
+      "name": "Abbruch bei Duplikat",
+      "type": "condition",
+      "depends_on": ["step_2_duplicate_check"],
+      "conditions": [
+        {
+          "id": "is_duplicate",
+          "expression": "duplicate_result.rows.length > 0",
+          "label": "Rechnung bereits vorhanden",
+          "action": "abort",
+          "abort_message": "Duplikat erkannt: Rechnung {{invoice_data.invoice_number}} von {{invoice_data.vendor_name}} wurde bereits am {{duplicate_result.rows[0].created_at}} verarbeitet."
+        }
+      ]
+    },
+    {
+      "id": "step_4_human_approval",
+      "name": "Freigabe anfordern",
+      "type": "human_approval",
+      "depends_on": ["step_3_abort_if_duplicate"],
+      "run_if": "invoice_data.gross_amount_eur >= context.approval_threshold_eur",
+      "config": {
+        "threshold_var": "context.approval_threshold_eur",
+        "default_threshold_eur": 1000,
+        "assignee_role": "finance_approver",
+        "expires_hours": 24,
+        "risk_level": "{{invoice_data.gross_amount_eur >= 10000 ? 'high' : 'medium'}}",
+        "display": {
+          "title": "Rechnungsfreigabe erforderlich: {{invoice_data.vendor_name}}",
+          "fields": [
+            { "label": "Lieferant",    "value": "{{invoice_data.vendor_name}}" },
+            { "label": "Betrag",       "value": "{{invoice_data.gross_amount_eur}} {{invoice_data.currency}}" },
+            { "label": "Rech.-Nr.",    "value": "{{invoice_data.invoice_number}}" },
+            { "label": "Datum",        "value": "{{invoice_data.invoice_date}}" },
+            { "label": "Fällig am",    "value": "{{invoice_data.due_date}}" },
+            { "label": "USt-IdNr.",    "value": "{{invoice_data.vendor_tax_id}}" },
+            { "label": "Positionen",   "value": "{{invoice_data.line_items.length}} Positionen" }
+          ]
+        },
+        "eu_ai_act_disclosure": "Diese Rechnungsdaten wurden automatisch per KI extrahiert (Modell: gpt-4o, Konfidenz: {{invoice_data._confidence}}). Bitte prüfen Sie die Angaben vor der Freigabe."
+      },
+      "output_var": "approval_result"
+    },
+    {
+      "id": "step_5_archive_document",
+      "name": "Dokument archivieren",
+      "type": "file_upload",
+      "depends_on": ["step_4_human_approval"],
+      "config": {
+        "backends": [
+          {
+            "type": "google_drive",
+            "folder_path": "Rechnungen/{{invoice_data.invoice_date | year}}/{{invoice_data.invoice_date | month}}/",
+            "filename": "{{invoice_data.invoice_date}}_{{invoice_data.vendor_name | slug}}_{{invoice_data.invoice_number}}.pdf",
+            "metadata": {
+              "invoice_number":   "{{invoice_data.invoice_number}}",
+              "vendor":           "{{invoice_data.vendor_name}}",
+              "amount_eur":       "{{invoice_data.gross_amount_eur}}",
+              "ai_generated":     true,
+              "ai_model":         "gpt-4o",
+              "ai_confidence":    "{{invoice_data._confidence}}",
+              "approved_by":      "{{approval_result.decision_by || 'auto'}}",
+              "processed_at":     "{{context.started_at}}"
+            }
+          },
+          {
+            "type": "s3",
+            "bucket":  "{{context.archive_bucket}}",
+            "key":     "invoices/{{invoice_data.invoice_date | year}}/{{invoice_data.invoice_date | month}}/{{invoice_data.invoice_number}}.pdf",
+            "storage_class": "STANDARD_IA"
+          }
+        ],
+        "input": "{{trigger.attachment_base64}}"
+      },
+      "output_var": "archive_result"
+    },
+    {
+      "id": "step_6_write_accounting_entry",
+      "name": "Buchhaltungseintrag schreiben",
+      "type": "db_write",
+      "depends_on": ["step_5_archive_document"],
+      "config": {
+        "table": "invoices",
+        "data": {
+          "tenant_id":         "{{context.tenant_id}}",
+          "invoice_number":    "{{invoice_data.invoice_number}}",
+          "invoice_date":      "{{invoice_data.invoice_date}}",
+          "due_date":          "{{invoice_data.due_date}}",
+          "vendor_name":       "{{invoice_data.vendor_name}}",
+          "vendor_tax_id":     "{{invoice_data.vendor_tax_id}}",
+          "vendor_iban":       "{{invoice_data.vendor_iban}}",
+          "net_amount_eur":    "{{invoice_data.net_amount_eur}}",
+          "tax_amount_eur":    "{{invoice_data.tax_amount_eur}}",
+          "gross_amount_eur":  "{{invoice_data.gross_amount_eur}}",
+          "tax_rate_pct":      "{{invoice_data.tax_rate_pct}}",
+          "currency":          "{{invoice_data.currency}}",
+          "line_items":        "{{invoice_data.line_items}}",
+          "cost_center":       "{{invoice_data.cost_center}}",
+          "archive_url_drive": "{{archive_result.google_drive.url}}",
+          "archive_url_s3":    "{{archive_result.s3.url}}",
+          "ai_extracted":      true,
+          "ai_confidence":     "{{invoice_data._confidence}}",
+          "approved_by":       "{{approval_result.decision_by}}",
+          "approved_at":       "{{approval_result.decision_at}}",
+          "status":            "archived",
+          "processed_by_workflow": "invoice_to_archive"
+        }
+      },
+      "output_var": "db_result"
+    },
+    {
+      "id": "step_7_notify",
+      "name": "Benachrichtigung versenden",
+      "type": "notification",
+      "depends_on": ["step_6_write_accounting_entry"],
+      "config": {
+        "channels": ["email", "slack"],
+        "email": {
+          "to": ["{{notifications.finance_team}}"],
+          "subject": "✅ Rechnung archiviert: {{invoice_data.vendor_name}} — {{invoice_data.gross_amount_eur}} EUR",
+          "template": "invoice_archived",
+          "variables": {
+            "vendor":         "{{invoice_data.vendor_name}}",
+            "amount":         "{{invoice_data.gross_amount_eur}}",
+            "currency":       "{{invoice_data.currency}}",
+            "invoice_number": "{{invoice_data.invoice_number}}",
+            "archive_url":    "{{archive_result.google_drive.url}}",
+            "approved_by":    "{{approval_result.decision_by || 'Automatisch (unter Schwellenwert)'}}",
+            "ai_note":        "Daten wurden automatisch per KI extrahiert. Bitte im Archiv prüfen."
+          }
+        },
+        "slack": {
+          "channel": "#buchhaltung",
+          "message_template": ":white_check_mark: *Rechnung archiviert*\nLieferant: {{invoice_data.vendor_name}}\nBetrag: {{invoice_data.gross_amount_eur}} {{invoice_data.currency}}\nRech.-Nr.: {{invoice_data.invoice_number}}\nArchiv: {{archive_result.google_drive.url}}"
+        }
+      }
+    }
+  ],
+  "context_defaults": {
+    "approval_threshold_eur": 1000,
+    "archive_bucket": "realsync-invoice-archive",
+    "tenant_domain": "example.com"
+  },
+  "notifications": {
+    "finance_team": ["buchhaltung@example.com"],
+    "slack_channel": "#buchhaltung",
+    "on_success": true,
+    "on_failure": true,
+    "on_duplicate": false
+  },
+  "error_handling": {
+    "on_extraction_failure": "human_review",
+    "on_archive_failure": "retry_3x_then_alert",
+    "on_db_failure": "alert_and_abort",
+    "dead_letter_queue": "dead-letters"
+  },
+  "metadata": {
+    "created_by": "system",
+    "created_at": "2026-04-18T00:00:00Z",
+    "updated_at": "2026-04-18T00:00:00Z",
+    "documentation_url": "https://docs.internal/playbooks/invoice_to_archive",
+    "gdpr_notes": "Rechnungsdaten enthalten personenbezogene Daten (Lieferant). Aufbewahrungsfrist: 10 Jahre (§ 147 AO). Keine Weitergabe an Dritte.",
+    "eu_ai_act_classification": "Limited Risk — Art. 50 Transparenzpflicht gilt"
+  }
+}

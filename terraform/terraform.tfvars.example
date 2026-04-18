@@ -1,0 +1,11 @@
+# terraform.tfvars.example
+# -----------------------------------------------------------------------
+# Copy this file to terraform.tfvars and replace the values below.
+# Never commit terraform.tfvars (add it to .gitignore) — it may contain
+# project IDs that you want to keep out of version control.
+# -----------------------------------------------------------------------
+
+project_id            = "YOUR_GCP_PROJECT_ID"
+region                = "europe-west1"
+github_repo           = "realsyncdynamics-spec/realsync-agent-os"
+use_workload_identity = false
