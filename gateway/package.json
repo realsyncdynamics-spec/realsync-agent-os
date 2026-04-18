@@ -1,0 +1,25 @@
+{
+  "name": "realsync-openclaw-gateway",
+  "version": "1.0.0",
+  "description": "RealSyncDynamics OpenClaw Gateway — Remote Execution Service",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "install-service": "node scripts/install-service.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.4.1",
+    "uuid": "^9.0.0",
+    "winston": "^3.11.0",
+    "systeminformation": "^5.21.20",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
+  "engines": { "node": ">=20.0.0" }
+}

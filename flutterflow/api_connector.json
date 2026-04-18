@@ -1,0 +1,362 @@
+{
+  "schemaVersion": "1.0",
+  "baseUrl": "[api_base_url]",
+  "apiCalls": [
+    {
+      "name": "AuthLogin",
+      "method": "POST",
+      "path": "/api/auth/login",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "email", "value": "[email]", "required": true },
+        { "key": "password", "value": "[password]", "required": true }
+      ],
+      "responseFields": ["access_token", "refresh_token", "expires_in", "user"],
+      "description": "Authentifiziert einen Nutzer und gibt JWT Access + Refresh Token zurück"
+    },
+    {
+      "name": "AuthRegister",
+      "method": "POST",
+      "path": "/api/auth/register",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "email", "value": "[email]", "required": true },
+        { "key": "password", "value": "[password]", "required": true },
+        { "key": "display_name", "value": "[display_name]", "required": true },
+        { "key": "tenant_name", "value": "[tenant_name]", "required": false }
+      ],
+      "responseFields": ["access_token", "refresh_token", "expires_in", "user", "tenant"],
+      "description": "Registriert einen neuen Nutzer und Tenant. Optional: Tenant-Name für neue Organisation"
+    },
+    {
+      "name": "AuthRefreshToken",
+      "method": "POST",
+      "path": "/api/auth/refresh",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "refresh_token", "value": "[refresh_token]", "required": true }
+      ],
+      "responseFields": ["access_token", "refresh_token", "expires_in"],
+      "description": "Erneuert den Access Token anhand des Refresh Tokens"
+    },
+    {
+      "name": "GetWorkflows",
+      "method": "GET",
+      "path": "/api/workflows",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [
+        { "key": "page", "value": "[page]", "required": false },
+        { "key": "limit", "value": "[limit]", "required": false },
+        { "key": "status", "value": "[status]", "required": false }
+      ],
+      "bodyFields": [],
+      "responseFields": ["data", "total", "page", "limit"],
+      "description": "Liste aller Workflows des Tenants mit optionaler Paginierung und Status-Filter"
+    },
+    {
+      "name": "GetWorkflowById",
+      "method": "GET",
+      "path": "/api/workflows/[workflow_id]",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["id", "tenantId", "title", "goal", "status", "config", "createdAt", "updatedAt", "runCount"],
+      "description": "Einzelnen Workflow anhand der ID abrufen"
+    },
+    {
+      "name": "CreateWorkflow",
+      "method": "POST",
+      "path": "/api/workflows",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "title", "value": "[title]", "required": true },
+        { "key": "goal", "value": "[goal]", "required": true },
+        { "key": "config", "value": "[config]", "required": false }
+      ],
+      "responseFields": ["id", "tenantId", "title", "goal", "status", "config", "createdAt"],
+      "description": "Neuen Workflow erstellen"
+    },
+    {
+      "name": "UpdateWorkflow",
+      "method": "PUT",
+      "path": "/api/workflows/[workflow_id]",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "title", "value": "[title]", "required": false },
+        { "key": "goal", "value": "[goal]", "required": false },
+        { "key": "config", "value": "[config]", "required": false }
+      ],
+      "responseFields": ["id", "tenantId", "title", "goal", "status", "config", "updatedAt"],
+      "description": "Bestehenden Workflow aktualisieren (Partial Update)"
+    },
+    {
+      "name": "DeleteWorkflow",
+      "method": "DELETE",
+      "path": "/api/workflows/[workflow_id]",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["message", "deleted_id"],
+      "description": "Workflow löschen. Nur möglich wenn Status 'draft' oder 'paused'"
+    },
+    {
+      "name": "ExecuteWorkflow",
+      "method": "POST",
+      "path": "/api/workflows/[workflow_id]/execute",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "input", "value": "[input]", "required": false },
+        { "key": "gateway_id", "value": "[gateway_id]", "required": false }
+      ],
+      "responseFields": ["run_id", "workflow_id", "status", "started_at"],
+      "description": "Workflow ausführen und Run starten. Gibt Run-ID zurück für Status-Polling"
+    },
+    {
+      "name": "PauseWorkflow",
+      "method": "POST",
+      "path": "/api/workflows/[workflow_id]/pause",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["id", "status", "paused_at"],
+      "description": "Laufenden Workflow pausieren"
+    },
+    {
+      "name": "ResumeWorkflow",
+      "method": "POST",
+      "path": "/api/workflows/[workflow_id]/resume",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["id", "status", "resumed_at"],
+      "description": "Pausierten Workflow fortsetzen"
+    },
+    {
+      "name": "ApproveWorkflow",
+      "method": "POST",
+      "path": "/api/workflows/[workflow_id]/approve",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "approved", "value": "[approved]", "required": true },
+        { "key": "comment", "value": "[comment]", "required": false }
+      ],
+      "responseFields": ["id", "status", "approval_status", "approved_by", "approved_at"],
+      "description": "Human-in-the-Loop Genehmigung für Workflow (Plan: Professional/Enterprise)"
+    },
+    {
+      "name": "GetTasksByWorkflow",
+      "method": "GET",
+      "path": "/api/workflows/[workflow_id]/tasks",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [
+        { "key": "status", "value": "[status]", "required": false }
+      ],
+      "bodyFields": [],
+      "responseFields": ["data", "total"],
+      "description": "Alle Tasks eines Workflows abrufen"
+    },
+    {
+      "name": "GetTaskById",
+      "method": "GET",
+      "path": "/api/tasks/[task_id]",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["id", "workflowId", "agentType", "title", "status", "priority", "dependsOn", "createdAt", "startedAt"],
+      "description": "Einzelnen Task anhand der ID abrufen"
+    },
+    {
+      "name": "GetTaskRuns",
+      "method": "GET",
+      "path": "/api/tasks/[task_id]/runs",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [
+        { "key": "limit", "value": "[limit]", "required": false }
+      ],
+      "bodyFields": [],
+      "responseFields": ["data", "total"],
+      "description": "Agent-Runs eines Tasks abrufen (Ausführungshistorie)"
+    },
+    {
+      "name": "GetGateways",
+      "method": "GET",
+      "path": "/api/gateways",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [
+        { "key": "status", "value": "[status]", "required": false }
+      ],
+      "bodyFields": [],
+      "responseFields": ["data", "total"],
+      "description": "Alle registrierten Gateways des Tenants abrufen"
+    },
+    {
+      "name": "GetGatewayById",
+      "method": "GET",
+      "path": "/api/gateways/[gateway_id]",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["id", "name", "host", "status", "lastHeartbeat", "capabilities"],
+      "description": "Einzelnes Gateway anhand der ID abrufen"
+    },
+    {
+      "name": "RegisterGateway",
+      "method": "POST",
+      "path": "/api/gateways/register",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "name", "value": "[name]", "required": true },
+        { "key": "host", "value": "[host]", "required": true },
+        { "key": "capabilities", "value": "[capabilities]", "required": false }
+      ],
+      "responseFields": ["id", "name", "host", "status", "api_key", "createdAt"],
+      "description": "Neues Gateway registrieren. Gibt einmalig den API-Key zurück"
+    },
+    {
+      "name": "GatewayHeartbeat",
+      "method": "POST",
+      "path": "/api/gateways/[gateway_id]/heartbeat",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "status", "value": "[status]", "required": false },
+        { "key": "metrics", "value": "[metrics]", "required": false }
+      ],
+      "responseFields": ["id", "status", "lastHeartbeat"],
+      "description": "Heartbeat eines Gateways senden (alle 30s empfohlen)"
+    },
+    {
+      "name": "DeleteGateway",
+      "method": "DELETE",
+      "path": "/api/gateways/[gateway_id]",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["message", "deleted_id"],
+      "description": "Gateway deregistrieren und löschen"
+    },
+    {
+      "name": "GetComplianceReports",
+      "method": "GET",
+      "path": "/api/compliance/reports",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [
+        { "key": "workflow_id", "value": "[workflow_id]", "required": false },
+        { "key": "risk_level", "value": "[risk_level]", "required": false },
+        { "key": "page", "value": "[page]", "required": false }
+      ],
+      "bodyFields": [],
+      "responseFields": ["data", "total", "page"],
+      "description": "Compliance-Reports abrufen, optional gefiltert nach Workflow oder Risiko-Level"
+    },
+    {
+      "name": "GetComplianceReportById",
+      "method": "GET",
+      "path": "/api/compliance/reports/[report_id]",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["id", "workflowId", "riskLevel", "findings", "generatedAt"],
+      "description": "Einzelnen Compliance-Report anhand der ID abrufen"
+    },
+    {
+      "name": "GenerateComplianceReport",
+      "method": "POST",
+      "path": "/api/compliance/reports/generate",
+      "headers": [
+        { "key": "Authorization", "value": "Bearer [auth_token]" },
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [
+        { "key": "workflow_id", "value": "[workflow_id]", "required": true },
+        { "key": "report_type", "value": "[report_type]", "required": false }
+      ],
+      "responseFields": ["id", "workflowId", "riskLevel", "findings", "generatedAt", "status"],
+      "description": "Neuen Compliance-Report für einen Workflow generieren (asynchron, Plan: Starter+)"
+    },
+    {
+      "name": "HealthCheck",
+      "method": "GET",
+      "path": "/api/health",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" }
+      ],
+      "queryParams": [],
+      "bodyFields": [],
+      "responseFields": ["status", "version", "timestamp", "services"],
+      "description": "Health-Check des Backends. Kein Auth erforderlich. Gibt Status aller Services zurück"
+    }
+  ]
+}

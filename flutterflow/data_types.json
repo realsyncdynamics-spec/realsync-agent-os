@@ -1,0 +1,147 @@
+{
+  "schemaVersion": "1.0",
+  "dataTypes": [
+    {
+      "name": "WorkflowModel",
+      "description": "Repräsentiert einen Workflow im RealSyncDynamics System",
+      "fields": [
+        { "name": "id", "type": "String", "nullable": false, "description": "Eindeutige Workflow-ID (UUID)" },
+        { "name": "tenantId", "type": "String", "nullable": false, "description": "ID des zugehörigen Tenants" },
+        { "name": "title", "type": "String", "nullable": false, "description": "Anzeigename des Workflows" },
+        { "name": "goal", "type": "String", "nullable": true, "description": "Ziel-Beschreibung des Workflows (natürliche Sprache)" },
+        { "name": "status", "type": "String", "nullable": false, "description": "Aktueller Status: draft | active | paused | completed | failed | pending_approval" },
+        { "name": "config", "type": "dynamic", "nullable": true, "description": "Workflow-Konfigurationsobjekt (JSON-Map mit Agent-Settings)" },
+        { "name": "createdAt", "type": "DateTime", "nullable": false, "description": "Erstellungszeitpunkt (ISO 8601)" },
+        { "name": "updatedAt", "type": "DateTime", "nullable": true, "description": "Letzter Änderungszeitpunkt (ISO 8601)" },
+        { "name": "runCount", "type": "int", "nullable": false, "defaultValue": 0, "description": "Anzahl der bisherigen Ausführungen" }
+      ],
+      "jsonMapping": {
+        "id": "id",
+        "tenantId": "tenant_id",
+        "title": "title",
+        "goal": "goal",
+        "status": "status",
+        "config": "config",
+        "createdAt": "created_at",
+        "updatedAt": "updated_at",
+        "runCount": "run_count"
+      }
+    },
+    {
+      "name": "TaskModel",
+      "description": "Repräsentiert einen einzelnen Task innerhalb eines Workflows",
+      "fields": [
+        { "name": "id", "type": "String", "nullable": false, "description": "Eindeutige Task-ID (UUID)" },
+        { "name": "workflowId", "type": "String", "nullable": false, "description": "ID des übergeordneten Workflows" },
+        { "name": "agentType", "type": "String", "nullable": false, "description": "Agent-Typ: devops | marketing | compliance | research | manager" },
+        { "name": "title", "type": "String", "nullable": false, "description": "Bezeichnung des Tasks" },
+        { "name": "status", "type": "String", "nullable": false, "description": "Task-Status: pending | running | completed | failed | waiting_approval" },
+        { "name": "priority", "type": "int", "nullable": false, "defaultValue": 1, "description": "Ausführungspriorität (1 = niedrig, 10 = hoch)" },
+        { "name": "dependsOn", "type": "List<String>", "nullable": true, "description": "Liste von Task-IDs, von denen dieser Task abhängt" },
+        { "name": "createdAt", "type": "DateTime", "nullable": false, "description": "Erstellungszeitpunkt (ISO 8601)" },
+        { "name": "startedAt", "type": "DateTime", "nullable": true, "description": "Startzeitpunkt der Ausführung (ISO 8601)" }
+      ],
+      "jsonMapping": {
+        "id": "id",
+        "workflowId": "workflow_id",
+        "agentType": "agent_type",
+        "title": "title",
+        "status": "status",
+        "priority": "priority",
+        "dependsOn": "depends_on",
+        "createdAt": "created_at",
+        "startedAt": "started_at"
+      }
+    },
+    {
+      "name": "AgentRunModel",
+      "description": "Protokolleintrag einer einzelnen Agent-Ausführung (Task-Run)",
+      "fields": [
+        { "name": "id", "type": "String", "nullable": false, "description": "Eindeutige Run-ID (UUID)" },
+        { "name": "taskId", "type": "String", "nullable": false, "description": "ID des zugehörigen Tasks" },
+        { "name": "modelUsed", "type": "String", "nullable": true, "description": "Verwendetes KI-Modell (z.B. gpt-4o, claude-3-5-sonnet)" },
+        { "name": "tokensUsed", "type": "int", "nullable": true, "description": "Verbrauchte Token-Anzahl (Input + Output)" },
+        { "name": "durationMs", "type": "int", "nullable": true, "description": "Ausführungsdauer in Millisekunden" },
+        { "name": "createdAt", "type": "DateTime", "nullable": false, "description": "Zeitpunkt des Runs (ISO 8601)" }
+      ],
+      "jsonMapping": {
+        "id": "id",
+        "taskId": "task_id",
+        "modelUsed": "model_used",
+        "tokensUsed": "tokens_used",
+        "durationMs": "duration_ms",
+        "createdAt": "created_at"
+      }
+    },
+    {
+      "name": "GatewayModel",
+      "description": "Repräsentiert ein registriertes Agent-Gateway (lokale Ausführungsinstanz)",
+      "fields": [
+        { "name": "id", "type": "String", "nullable": false, "description": "Eindeutige Gateway-ID (UUID)" },
+        { "name": "name", "type": "String", "nullable": false, "description": "Anzeigename des Gateways" },
+        { "name": "host", "type": "String", "nullable": false, "description": "Hostname oder IP des Gateways (z.B. https://gw.example.com)" },
+        { "name": "status", "type": "String", "nullable": false, "description": "Gateway-Status: online | offline | degraded" },
+        { "name": "lastHeartbeat", "type": "DateTime", "nullable": true, "description": "Letzter empfangener Heartbeat (ISO 8601)" },
+        { "name": "capabilities", "type": "List<String>", "nullable": true, "description": "Liste der unterstützten Agent-Typen" }
+      ],
+      "jsonMapping": {
+        "id": "id",
+        "name": "name",
+        "host": "host",
+        "status": "status",
+        "lastHeartbeat": "last_heartbeat",
+        "capabilities": "capabilities"
+      }
+    },
+    {
+      "name": "ComplianceReportModel",
+      "description": "Compliance-Analysebericht für einen Workflow",
+      "fields": [
+        { "name": "id", "type": "String", "nullable": false, "description": "Eindeutige Report-ID (UUID)" },
+        { "name": "workflowId", "type": "String", "nullable": false, "description": "ID des analysierten Workflows" },
+        { "name": "riskLevel", "type": "String", "nullable": false, "description": "Risiko-Einstufung: low | medium | high | critical" },
+        { "name": "findings", "type": "List<dynamic>", "nullable": true, "description": "Liste der Compliance-Befunde als strukturierte Objekte" },
+        { "name": "generatedAt", "type": "DateTime", "nullable": false, "description": "Zeitpunkt der Report-Generierung (ISO 8601)" }
+      ],
+      "jsonMapping": {
+        "id": "id",
+        "workflowId": "workflow_id",
+        "riskLevel": "risk_level",
+        "findings": "findings",
+        "generatedAt": "generated_at"
+      }
+    },
+    {
+      "name": "UserModel",
+      "description": "Nutzer-Profil innerhalb eines Tenants",
+      "fields": [
+        { "name": "id", "type": "String", "nullable": false, "description": "Eindeutige User-ID (UUID)" },
+        { "name": "email", "type": "String", "nullable": false, "description": "E-Mail-Adresse des Nutzers" },
+        { "name": "role", "type": "String", "nullable": false, "description": "Nutzer-Rolle: owner | admin | member | viewer" },
+        { "name": "displayName", "type": "String", "nullable": true, "description": "Anzeigename des Nutzers" }
+      ],
+      "jsonMapping": {
+        "id": "id",
+        "email": "email",
+        "role": "role",
+        "displayName": "display_name"
+      }
+    },
+    {
+      "name": "TenantModel",
+      "description": "Tenant-Organisation mit Plan und Einstellungen",
+      "fields": [
+        { "name": "id", "type": "String", "nullable": false, "description": "Eindeutige Tenant-ID (UUID)" },
+        { "name": "name", "type": "String", "nullable": false, "description": "Name der Organisation" },
+        { "name": "plan", "type": "String", "nullable": false, "description": "Aktiver Billing-Plan: free | starter | professional | enterprise" },
+        { "name": "settings", "type": "dynamic", "nullable": true, "description": "Tenant-spezifische Einstellungen als JSON-Map" }
+      ],
+      "jsonMapping": {
+        "id": "id",
+        "name": "name",
+        "plan": "plan",
+        "settings": "settings"
+      }
+    }
+  ]
+}

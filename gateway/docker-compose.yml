@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  openclaw-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: realsync-gateway
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8443}:8443"
+    environment:
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY}
+      - GATEWAY_ID=${GATEWAY_ID:-gateway-01}
+      - PORT=8443
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SCRIPTS_DIR=/app/scripts
+      - LOG_FILE=/app/logs/gateway.log
+      - MAX_JOB_TIMEOUT_MS=${MAX_JOB_TIMEOUT_MS:-300000}
+      - ALLOWED_SCRIPT_EXTENSIONS=${ALLOWED_SCRIPT_EXTENSIONS:-.sh,.ps1,.py}
+      - NODE_ENV=production
+    volumes:
+      # Scripts: read-only mount from host so the container cannot modify them
+      - ./scripts:/app/scripts:ro
+      # Persistent log storage
+      - ./logs:/app/logs
+      # Optional: expose host system logs for /logs/read access
+      - /var/log:/host/var/log:ro
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
