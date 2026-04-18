@@ -1,9 +1,10 @@
 /**
- * RealSyncDynamics Agent-OS — Express Application Entry Point
+ * RealSyncDynamics Agent-OS — Express Application Entry Point v1.4.0
  *
  * Route structure:
- *   /health            — Health check (no auth)
- *   /auth/*            — Auth endpoints (no auth middleware)
+ *   /health            — Liveness probe (no auth, Cloud Run)
+ *   /health/ready      — Readiness probe (DB + Redis check)
+ *   /auth/*            — Auth endpoints (no JWT required)
  *   /webhooks/stripe   — Stripe webhooks (raw body, no auth)
  *   /api/*             — Protected API routes (JWT + audit log)
  *   /agent/*           — Internal agent routes (X-Agent-Key)
@@ -13,9 +14,10 @@
 
 require('dotenv').config();
 
-const express = require('express');
-const helmet  = require('helmet');
-const cors    = require('cors');
+const express    = require('express');
+const helmet     = require('helmet');
+const cors       = require('cors');
+const rateLimit  = require('express-rate-limit');
 
 // ---------------------------------------------------------------------------
 // App init
@@ -28,15 +30,46 @@ const app = express();
 // ---------------------------------------------------------------------------
 
 app.use(helmet());
+app.set('trust proxy', 1); // Required behind Cloud Run / GCP LB
 
 app.use(
   cors({
     origin:      process.env.FRONTEND_URL || '*',
     credentials: true,
     methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'X-Agent-Key'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-Agent-Key', 'X-Request-ID'],
   })
 );
+
+// ---------------------------------------------------------------------------
+// Global rate limiter (100 req/min per IP across all routes)
+// Individual routes (auth) apply stricter limits on top
+// ---------------------------------------------------------------------------
+
+app.use(
+  rateLimit({
+    windowMs:         60 * 1000,
+    max:              100,
+    standardHeaders:  true,
+    legacyHeaders:    false,
+    message: {
+      type:   'https://realsync.io/errors/rate-limit',
+      title:  'Too Many Requests',
+      status: 429,
+      detail: 'You have exceeded the request rate limit. Please try again later.',
+    },
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Request ID injection (for log correlation)
+// ---------------------------------------------------------------------------
+
+app.use((req, _res, next) => {
+  req.requestId = req.headers['x-request-id'] ||
+    `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  next();
+});
 
 // ---------------------------------------------------------------------------
 // Stripe webhook — MUST come before express.json() so raw body is preserved
@@ -56,18 +89,10 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ---------------------------------------------------------------------------
-// Health check (no auth)
+// Health routes (no auth — Cloud Run liveness + readiness probes)
 // ---------------------------------------------------------------------------
 
-app.get('/health', (req, res) => {
-  res.json({
-    status:              'ok',
-    version:             '1.0.0',
-    eu_ai_act_compliant: true,
-    timestamp:           new Date().toISOString(),
-    uptime_s:            Math.floor(process.uptime()),
-  });
-});
+app.use('/health', require('./routes/health'));
 
 // ---------------------------------------------------------------------------
 // Auth routes (no auth middleware)
@@ -82,7 +107,6 @@ app.use('/auth', require('./routes/auth'));
 const { authenticate }   = require('./middleware/auth');
 const { auditMiddleware } = require('./middleware/audit');
 
-// All /api/* routes require a valid JWT and are audit-logged
 app.use('/api', authenticate);
 app.use('/api', auditMiddleware);
 
@@ -91,6 +115,8 @@ app.use('/api/tasks',      require('./routes/tasks'));
 app.use('/api/gateways',   require('./routes/gateways'));
 app.use('/api/compliance', require('./routes/compliance'));
 app.use('/api/billing',    require('./routes/billing'));
+app.use('/api/approvals',  require('./routes/approvals'));   // Sprint 4: Human-in-the-loop
+app.use('/api/audit',      require('./routes/audit'));       // Sprint 4: Audit log query
 
 // ---------------------------------------------------------------------------
 // Agent routes (internal — X-Agent-Key protected)
@@ -98,9 +124,7 @@ app.use('/api/billing',    require('./routes/billing'));
 
 const { agentAuth } = require('./middleware/agent-auth');
 
-// Apply agent auth to all /agent/* routes
 app.use('/agent', agentAuth);
-
 app.use('/agent/devops',     require('./agents/devops-agent'));
 app.use('/agent/marketing',  require('./agents/marketing-agent'));
 app.use('/agent/compliance', require('./agents/compliance-agent'));
@@ -112,50 +136,44 @@ app.use('/agent/research',   require('./agents/research-agent'));
 
 app.use((req, res) => {
   res.status(404).json({
-    type:   'https://realsync.io/errors/not-found',
-    title:  'Not Found',
-    status: 404,
-    detail: `${req.method} ${req.path} not found`,
+    type:     'https://realsync.io/errors/not-found',
+    title:    'Not Found',
+    status:   404,
+    detail:   `${req.method} ${req.path} not found`,
+    instance: req.requestId,
   });
 });
 
 // ---------------------------------------------------------------------------
-// RFC 9457 Error handler
+// RFC 9457 Global Error Handler
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  // Log the full error server-side
-  console.error('[error]', {
+  console.error(JSON.stringify({
+    level:      'error',
     message:    err.message,
     stack:      err.stack,
     path:       req.path,
     method:     req.method,
-    request_id: req.headers['x-request-id'] || null,
-  });
+    request_id: req.requestId,
+    tenant_id:  req.user?.tenant_id,
+    user_id:    req.user?.id,
+  }));
 
-  // Propagate explicit HTTP status codes from thrown objects
   const status = err.status || err.statusCode || 500;
 
-  // RFC 9457 Problem Details response
   const body = {
-    type:   err.type || `https://realsync.io/errors/${status === 500 ? 'internal-server-error' : 'error'}`,
-    title:  err.title || (status === 500 ? 'Internal Server Error' : 'Error'),
+    type:     err.type || `https://realsync.io/errors/${status === 500 ? 'internal' : 'error'}`,
+    title:    err.title || (status === 500 ? 'Internal Server Error' : 'Error'),
     status,
-    detail: status === 500
+    detail:   status === 500
       ? 'An unexpected error occurred. Please try again later.'
-      : err.message || 'An error occurred.',
+      : (err.message || 'An error occurred.'),
+    instance: req.requestId,
   };
 
-  // Attach validation errors if present (e.g., from express-validator)
-  if (err.errors) {
-    body.errors = err.errors;
-  }
-
-  // Include request ID if available (useful for support correlation)
-  if (req.headers['x-request-id']) {
-    body.instance = req.headers['x-request-id'];
-  }
+  if (err.errors) body.errors = err.errors;
 
   res.status(status).json(body);
 });
@@ -164,36 +182,33 @@ app.use((err, req, res, next) => {
 // Server start + graceful shutdown
 // ---------------------------------------------------------------------------
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT || '8080', 10);
 
 const server = app.listen(PORT, () => {
-  console.log(`RealSyncDynamics Agent-OS running on :${PORT}`);
-  console.log(`  Environment : ${process.env.NODE_ENV || 'development'}`);
-  console.log(`  Frontend URL: ${process.env.FRONTEND_URL || '*'}`);
+  console.log(JSON.stringify({
+    level:       'info',
+    message:     'RealSyncDynamics Agent-OS started',
+    port:        PORT,
+    environment: process.env.NODE_ENV || 'development',
+    pid:         process.pid,
+  }));
 });
 
-// Graceful shutdown on SIGTERM (sent by container orchestrators / process managers)
-process.on('SIGTERM', () => {
-  console.log('[shutdown] SIGTERM received — closing HTTP server...');
+const shutdown = (signal) => {
+  console.log(JSON.stringify({ level: 'info', message: `${signal} received — shutting down` }));
   server.close(() => {
-    console.log('[shutdown] HTTP server closed. Exiting.');
+    console.log(JSON.stringify({ level: 'info', message: 'HTTP server closed. Exiting.' }));
     process.exit(0);
   });
+  // Force exit after 10s if graceful shutdown stalls
+  setTimeout(() => process.exit(1), 10_000).unref();
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+
+process.on('unhandledRejection', (reason) => {
+  console.error(JSON.stringify({ level: 'error', message: 'unhandledRejection', reason: String(reason) }));
 });
 
-// Also handle SIGINT (Ctrl+C in dev)
-process.on('SIGINT', () => {
-  console.log('[shutdown] SIGINT received — closing HTTP server...');
-  server.close(() => {
-    console.log('[shutdown] HTTP server closed. Exiting.');
-    process.exit(0);
-  });
-});
-
-// Unhandled promise rejections — log and exit so the process manager restarts
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[unhandledRejection]', reason, promise);
-  // Optionally: process.exit(1);
-});
-
-module.exports = app; // Export for testing
+module.exports = app;
