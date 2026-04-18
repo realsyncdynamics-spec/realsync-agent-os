@@ -1,0 +1,189 @@
+{
+  "id": "backup_verify",
+  "name": "Backup Verification",
+  "description": "Prüft täglich ob alle konfigurierten Backups (Datenbank, Dateisystem, Cloud-Storage) vorhanden, aktuell und nicht korrupt sind. Bei Fehlschlag sofortige Benachrichtigung per E-Mail und Slack. Keine KI-Entscheidung — rein regelbasiert.",
+  "version": "1.0.0",
+  "eu_risk_level": "minimal",
+  "eu_ai_act_notes": "Kein KI-Einsatz. Regelbasierte Prüfungen. Kein Human-Approval-Gate nötig.",
+  "target_audience": "KMU Deutschland — IT / Geschäftsführung",
+  "tags": ["backup", "monitoring", "daily", "gdpr", "data-protection"],
+  "trigger": {
+    "type": "cron",
+    "expression": "0 7 * * *",
+    "timezone": "Europe/Berlin",
+    "enabled": true,
+    "description": "Täglich 07:00 Uhr Berlin-Zeit — nach nächtlichem Backup-Fenster"
+  },
+  "timeout_seconds": 300,
+  "steps": [
+    {
+      "id": "step_1_execute_backup_verify",
+      "name": "Backup-Verify-Script ausführen",
+      "type": "openclaw_execute",
+      "config": {
+        "script": "backup_verify.sh",
+        "params": {
+          "check_age_hours": 26,
+          "min_size_bytes": 1024,
+          "checksum_verify": true
+        },
+        "timeout_seconds": 120,
+        "stream": false
+      },
+      "output_var": "verify_result",
+      "on_failure": "continue",
+      "retry": {
+        "attempts": 2,
+        "delay_seconds": 30
+      }
+    },
+    {
+      "id": "step_2_check_s3_backups",
+      "name": "Cloud-Storage-Backups prüfen",
+      "type": "openclaw_execute",
+      "depends_on": ["step_1_execute_backup_verify"],
+      "config": {
+        "script": "backup_verify.sh",
+        "params": {
+          "mode": "s3",
+          "bucket": "{{context.backup_bucket}}",
+          "prefix": "daily/",
+          "check_age_hours": 26
+        },
+        "timeout_seconds": 60
+      },
+      "output_var": "s3_result",
+      "on_failure": "continue"
+    },
+    {
+      "id": "step_3_evaluate_results",
+      "name": "Ergebnisse bewerten",
+      "type": "condition",
+      "depends_on": ["step_1_execute_backup_verify", "step_2_check_s3_backups"],
+      "conditions": [
+        {
+          "id": "cond_backup_missing",
+          "expression": "verify_result.backups_missing > 0",
+          "label": "Backups fehlen",
+          "severity": "critical"
+        },
+        {
+          "id": "cond_backup_too_old",
+          "expression": "verify_result.backups_too_old > 0",
+          "label": "Backups zu alt (> 26h)",
+          "severity": "critical"
+        },
+        {
+          "id": "cond_checksum_failed",
+          "expression": "verify_result.checksum_failures > 0",
+          "label": "Prüfsummen-Fehler — Backup möglicherweise korrupt",
+          "severity": "critical"
+        },
+        {
+          "id": "cond_s3_failed",
+          "expression": "s3_result.status !== 'ok'",
+          "label": "Cloud-Backup-Prüfung fehlgeschlagen",
+          "severity": "warning"
+        },
+        {
+          "id": "cond_all_ok",
+          "expression": "verify_result.backups_missing === 0 && verify_result.backups_too_old === 0 && verify_result.checksum_failures === 0",
+          "label": "Alle Backups OK",
+          "severity": "info"
+        }
+      ],
+      "output_var": "evaluation"
+    },
+    {
+      "id": "step_4_store_result",
+      "name": "Ergebnis in Datenbank speichern",
+      "type": "db_write",
+      "depends_on": ["step_3_evaluate_results"],
+      "config": {
+        "table": "health_metrics",
+        "data": {
+          "tenant_id":        "{{context.tenant_id}}",
+          "gateway_id":       "{{context.gateway_id}}",
+          "metric_type":      "backup_verify",
+          "hostname":         "{{verify_result.hostname}}",
+          "status":           "{{evaluation.cond_all_ok ? 'ok' : 'failed'}}",
+          "details": {
+            "backups_checked":   "{{verify_result.backups_checked}}",
+            "backups_ok":        "{{verify_result.backups_ok}}",
+            "backups_missing":   "{{verify_result.backups_missing}}",
+            "backups_too_old":   "{{verify_result.backups_too_old}}",
+            "checksum_failures": "{{verify_result.checksum_failures}}",
+            "s3_status":         "{{s3_result.status}}",
+            "total_size_gb":     "{{verify_result.total_size_gb}}"
+          },
+          "recorded_at": "{{context.started_at}}"
+        }
+      }
+    },
+    {
+      "id": "step_5_notify_on_failure",
+      "name": "Kritische Benachrichtigung",
+      "type": "notification",
+      "depends_on": ["step_4_store_result"],
+      "run_if": "!evaluation.cond_all_ok",
+      "config": {
+        "channels": ["email", "slack"],
+        "priority": "high",
+        "email": {
+          "to": ["{{notifications.ops_team}}"],
+          "subject": "🚨 BACKUP FEHLER — {{verify_result.hostname}} — sofortige Aktion erforderlich",
+          "template": "backup_failure",
+          "variables": {
+            "hostname":          "{{verify_result.hostname}}",
+            "missing":           "{{verify_result.backups_missing}}",
+            "too_old":           "{{verify_result.backups_too_old}}",
+            "checksum_failures": "{{verify_result.checksum_failures}}",
+            "s3_status":         "{{s3_result.status}}",
+            "details":           "{{verify_result.details}}",
+            "timestamp":         "{{context.started_at}}",
+            "gdpr_note":         "Fehlende Backups können DSGVO-Risiken (Art. 32) bedeuten — bitte sofort prüfen."
+          }
+        },
+        "slack": {
+          "channel": "#ops-alerts",
+          "message_template": ":rotating_light: *BACKUP FEHLER — {{verify_result.hostname}}*\nFehlend: {{verify_result.backups_missing}} | Zu alt: {{verify_result.backups_too_old}} | Prüfsummenfehler: {{verify_result.checksum_failures}}\n*Sofortige Aktion erforderlich!*"
+        }
+      }
+    },
+    {
+      "id": "step_6_notify_on_success",
+      "name": "Erfolgs-Bestätigung",
+      "type": "notification",
+      "depends_on": ["step_4_store_result"],
+      "run_if": "evaluation.cond_all_ok && context.notify_on_success === true",
+      "config": {
+        "channels": ["slack"],
+        "email": {
+          "to":      [],
+          "subject": "✅ Backup OK — {{verify_result.hostname}}"
+        },
+        "slack": {
+          "channel": "#ops-alerts",
+          "message_template": ":white_check_mark: *Backup-Check OK — {{verify_result.hostname}}*\n{{verify_result.backups_checked}} Backups geprüft | Gesamt: {{verify_result.total_size_gb}} GB | S3: {{s3_result.status}}"
+        }
+      }
+    }
+  ],
+  "context_defaults": {
+    "backup_bucket": "realsync-backups",
+    "notify_on_success": false
+  },
+  "notifications": {
+    "ops_team": ["admin@example.com"],
+    "slack_channel": "#ops-alerts",
+    "on_success": false,
+    "on_failure": true
+  },
+  "metadata": {
+    "created_by": "system",
+    "created_at": "2026-04-19T00:00:00Z",
+    "updated_at": "2026-04-19T00:00:00Z",
+    "documentation_url": "https://docs.internal/playbooks/backup_verify",
+    "gdpr_notes": "Backup-Daten können personenbezogene Daten enthalten. Aufbewahrungsfrist prüfen (§ 147 AO: 10 Jahre für Buchhaltungsdaten). DSGVO Art. 32: Technische Maßnahmen zur Datensicherheit."
+  }
+}

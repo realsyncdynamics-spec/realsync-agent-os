@@ -1,5 +1,7 @@
 /**
- * RealSyncDynamics Agent-OS — Express Application Entry Point v1.4.0
+ * RealSyncDynamics Agent-OS — Express Application Entry Point v1.5.0
+ *
+ * Sprint 6: Worker integration via ENABLE_WORKERS flag.
  *
  * Route structure:
  *   /health            — Liveness probe (no auth, Cloud Run)
@@ -30,7 +32,7 @@ const app = express();
 // ---------------------------------------------------------------------------
 
 app.use(helmet());
-app.set('trust proxy', 1); // Required behind Cloud Run / GCP LB
+app.set('trust proxy', 1);
 
 app.use(
   cors({
@@ -42,16 +44,15 @@ app.use(
 );
 
 // ---------------------------------------------------------------------------
-// Global rate limiter (100 req/min per IP across all routes)
-// Individual routes (auth) apply stricter limits on top
+// Global rate limiter
 // ---------------------------------------------------------------------------
 
 app.use(
   rateLimit({
-    windowMs:         60 * 1000,
-    max:              100,
-    standardHeaders:  true,
-    legacyHeaders:    false,
+    windowMs:        60 * 1000,
+    max:             100,
+    standardHeaders: true,
+    legacyHeaders:   false,
     message: {
       type:   'https://realsync.io/errors/rate-limit',
       title:  'Too Many Requests',
@@ -62,7 +63,7 @@ app.use(
 );
 
 // ---------------------------------------------------------------------------
-// Request ID injection (for log correlation)
+// Request ID injection
 // ---------------------------------------------------------------------------
 
 app.use((req, _res, next) => {
@@ -72,7 +73,7 @@ app.use((req, _res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Stripe webhook — MUST come before express.json() so raw body is preserved
+// Stripe webhook — MUST be before express.json()
 // ---------------------------------------------------------------------------
 
 app.use(
@@ -82,26 +83,26 @@ app.use(
 );
 
 // ---------------------------------------------------------------------------
-// Body parsers (after stripe webhook route)
+// Body parsers
 // ---------------------------------------------------------------------------
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ---------------------------------------------------------------------------
-// Health routes (no auth — Cloud Run liveness + readiness probes)
+// Health routes (no auth)
 // ---------------------------------------------------------------------------
 
 app.use('/health', require('./routes/health'));
 
 // ---------------------------------------------------------------------------
-// Auth routes (no auth middleware)
+// Auth routes
 // ---------------------------------------------------------------------------
 
 app.use('/auth', require('./routes/auth'));
 
 // ---------------------------------------------------------------------------
-// Protected API routes (JWT + audit log)
+// Protected API routes
 // ---------------------------------------------------------------------------
 
 const { authenticate }   = require('./middleware/auth');
@@ -115,11 +116,11 @@ app.use('/api/tasks',      require('./routes/tasks'));
 app.use('/api/gateways',   require('./routes/gateways'));
 app.use('/api/compliance', require('./routes/compliance'));
 app.use('/api/billing',    require('./routes/billing'));
-app.use('/api/approvals',  require('./routes/approvals'));   // Sprint 4: Human-in-the-loop
-app.use('/api/audit',      require('./routes/audit'));       // Sprint 4: Audit log query
+app.use('/api/approvals',  require('./routes/approvals'));
+app.use('/api/audit',      require('./routes/audit'));
 
 // ---------------------------------------------------------------------------
-// Agent routes (internal — X-Agent-Key protected)
+// Agent routes (X-Agent-Key)
 // ---------------------------------------------------------------------------
 
 const { agentAuth } = require('./middleware/agent-auth');
@@ -162,7 +163,6 @@ app.use((err, req, res, next) => {
   }));
 
   const status = err.status || err.statusCode || 500;
-
   const body = {
     type:     err.type || `https://realsync.io/errors/${status === 500 ? 'internal' : 'error'}`,
     title:    err.title || (status === 500 ? 'Internal Server Error' : 'Error'),
@@ -172,36 +172,77 @@ app.use((err, req, res, next) => {
       : (err.message || 'An error occurred.'),
     instance: req.requestId,
   };
-
   if (err.errors) body.errors = err.errors;
-
   res.status(status).json(body);
 });
 
 // ---------------------------------------------------------------------------
-// Server start + graceful shutdown
+// Server start
 // ---------------------------------------------------------------------------
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(JSON.stringify({
     level:       'info',
     message:     'RealSyncDynamics Agent-OS started',
+    version:     '1.5.0',
     port:        PORT,
     environment: process.env.NODE_ENV || 'development',
+    workers:     process.env.ENABLE_WORKERS === 'true' ? 'enabled' : 'disabled',
     pid:         process.pid,
   }));
+
+  // ── Start BullMQ workers if enabled ────────────────────────
+  // Set ENABLE_WORKERS=true in production (Cloud Run) only when Redis is available.
+  // Workers run in the same process for simplicity; extract to a separate
+  // Cloud Run Job for high-volume deployments.
+  if (process.env.ENABLE_WORKERS === 'true' && process.env.REDIS_URL) {
+    try {
+      const { start: startWorkers } = require('./workers/worker-registry');
+      await startWorkers();
+      console.log(JSON.stringify({ level: 'info', message: 'BullMQ workers started' }));
+    } catch (err) {
+      // Non-fatal: server continues even if workers fail to start
+      console.error(JSON.stringify({
+        level:   'error',
+        message: 'Failed to start BullMQ workers — continuing without workers',
+        error:   err.message,
+      }));
+    }
+  }
 });
 
-const shutdown = (signal) => {
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+// ---------------------------------------------------------------------------
+
+const shutdown = async (signal) => {
   console.log(JSON.stringify({ level: 'info', message: `${signal} received — shutting down` }));
-  server.close(() => {
-    console.log(JSON.stringify({ level: 'info', message: 'HTTP server closed. Exiting.' }));
+
+  // Stop accepting new connections
+  server.close(async () => {
+    // Stop workers gracefully before exit
+    if (process.env.ENABLE_WORKERS === 'true') {
+      try {
+        const { stop: stopWorkers } = require('./workers/worker-registry');
+        await stopWorkers();
+        console.log(JSON.stringify({ level: 'info', message: 'BullMQ workers stopped' }));
+      } catch { /* ignore */ }
+    }
+
+    // Close DB pool
+    try {
+      const pool = require('./db');
+      await pool.end();
+      console.log(JSON.stringify({ level: 'info', message: 'DB pool closed' }));
+    } catch { /* ignore */ }
+
+    console.log(JSON.stringify({ level: 'info', message: 'Shutdown complete. Exiting.' }));
     process.exit(0);
   });
-  // Force exit after 10s if graceful shutdown stalls
-  setTimeout(() => process.exit(1), 10_000).unref();
+
+  setTimeout(() => process.exit(1), 15_000).unref();
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
