@@ -1,27 +1,70 @@
+# ============================================================
+# RealSync Agent-OS — Cloud Run Deploy Pipeline
+# Targets: europe-west1 / Artifact Registry
+# Auth:    Service Account JSON key (GCP_SA_KEY secret)
+#          → migrate to Workload Identity Federation later
+# ============================================================
 name: Deploy to Cloud Run
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: false
+        default: 'production'
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  REGION: europe-west1
-  SERVICE: realsync-backend
-  IMAGE: gcr.io/${{ secrets.GCP_PROJECT_ID }}/realsync-backend
+  PROJECT_ID:     ${{ secrets.GCP_PROJECT_ID }}
+  REGION:         europe-west1
+  REGISTRY:       europe-west1-docker.pkg.dev
+  REPOSITORY:     realsync-agent-os          # Artifact Registry repo name
+  BACKEND_SVC:    realsync-backend
+  GATEWAY_SVC:    realsync-gateway
 
 jobs:
-  deploy:
-    name: Deploy to Cloud Run
+  # ----------------------------------------------------------
+  # 1. Lint & unit tests (fail fast before building images)
+  # ----------------------------------------------------------
+  test:
+    name: Lint & Test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Lint
+        working-directory: backend
+        run: npm run lint --if-present
+
+      - name: Unit tests
+        working-directory: backend
+        run: npm test --if-present
+
+  # ----------------------------------------------------------
+  # 2. Build & push backend image to Artifact Registry
+  # ----------------------------------------------------------
+  build-backend:
+    name: Build Backend Image
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -31,34 +74,227 @@ jobs:
       - name: Setup Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker
-        run: gcloud auth configure-docker --quiet
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
 
-      - name: Build Docker Image
+      - name: Set image name
+        id: meta
         run: |
-          docker build -t $IMAGE:$GITHUB_SHA ./backend
-          docker tag $IMAGE:$GITHUB_SHA $IMAGE:latest
+          IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_SVC }}"
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
 
-      - name: Push Docker Image
+      - name: Build image
         run: |
-          docker push $IMAGE:$GITHUB_SHA
+          docker build \
+            --tag $IMAGE:${{ github.sha }} \
+            --tag $IMAGE:latest \
+            --label "git.sha=${{ github.sha }}" \
+            --label "git.ref=${{ github.ref_name }}" \
+            --label "build.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            ./backend
+
+      - name: Push image
+        run: |
+          docker push $IMAGE:${{ github.sha }}
           docker push $IMAGE:latest
 
-      - name: Deploy to Cloud Run
+  # ----------------------------------------------------------
+  # 3. Build & push gateway image
+  # ----------------------------------------------------------
+  build-gateway:
+    name: Build Gateway Image
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Set image name
+        id: meta
         run: |
-          gcloud run deploy $SERVICE \
-            --image $IMAGE:$GITHUB_SHA \
-            --region $REGION \
+          IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.GATEWAY_SVC }}"
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
+
+      - name: Build image
+        run: |
+          docker build \
+            --tag $IMAGE:${{ github.sha }} \
+            --tag $IMAGE:latest \
+            --label "git.sha=${{ github.sha }}" \
+            ./gateway
+
+      - name: Push image
+        run: |
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+  # ----------------------------------------------------------
+  # 4. Deploy backend to Cloud Run
+  # ----------------------------------------------------------
+  deploy-backend:
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+    needs: build-backend
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: |
+          gcloud run deploy ${{ env.BACKEND_SVC }} \
+            --image "${{ needs.build-backend.outputs.image }}:${{ github.sha }}" \
+            --region ${{ env.REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars "NODE_ENV=production" \
-            --set-secrets "DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,JWT_SECRET=JWT_SECRET:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest,STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest" \
+            --set-env-vars "NODE_ENV=production,LOG_LEVEL=info" \
+            --set-secrets "\
+              DATABASE_URL=DATABASE_URL:latest,\
+              REDIS_URL=REDIS_URL:latest,\
+              JWT_SECRET=JWT_SECRET:latest,\
+              JWT_REFRESH_SECRET=JWT_REFRESH_SECRET:latest,\
+              OPENAI_API_KEY=OPENAI_API_KEY:latest,\
+              STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest,\
+              STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest,\
+              OPENCLAW_API_KEY=OPENCLAW_API_KEY:latest" \
             --memory 512Mi \
             --cpu 1 \
             --min-instances 0 \
             --max-instances 10 \
-            --port 8080
+            --port 8080 \
+            --timeout 300 \
+            --concurrency 80 \
+            --service-account ${{ secrets.GCP_DEPLOY_SA }}
 
-      - name: Show Service URL
+      - name: Get service URL
+        id: url
         run: |
-          gcloud run services describe $SERVICE --region $REGION --format 'value(status.url)'
+          URL=$(gcloud run services describe ${{ env.BACKEND_SVC }} \
+            --region ${{ env.REGION }} \
+            --format 'value(status.url)')
+          echo "url=${URL}" >> $GITHUB_OUTPUT
+
+      - name: Smoke test — health endpoint
+        run: |
+          echo "Testing: ${{ steps.url.outputs.url }}/health"
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              "${{ steps.url.outputs.url }}/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Health check failed after 5 attempts."
+          exit 1
+
+      - name: Output service URL
+        run: echo "Backend live at ${{ steps.url.outputs.url }}"
+
+  # ----------------------------------------------------------
+  # 5. Deploy gateway to Cloud Run
+  # ----------------------------------------------------------
+  deploy-gateway:
+    name: Deploy Gateway
+    runs-on: ubuntu-latest
+    needs: [build-gateway, deploy-backend]
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get backend URL
+        id: backend
+        run: |
+          URL=$(gcloud run services describe ${{ env.BACKEND_SVC }} \
+            --region ${{ env.REGION }} \
+            --format 'value(status.url)')
+          echo "url=${URL}" >> $GITHUB_OUTPUT
+
+      - name: Deploy Gateway to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.GATEWAY_SVC }} \
+            --image "${{ needs.build-gateway.outputs.image }}:${{ github.sha }}" \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }}" \
+            --set-secrets "GATEWAY_SECRET=GATEWAY_SECRET:latest" \
+            --memory 256Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 5 \
+            --port 8443 \
+            --timeout 120 \
+            --service-account ${{ secrets.GCP_DEPLOY_SA }}
+
+      - name: Smoke test — gateway health
+        run: |
+          URL=$(gcloud run services describe ${{ env.GATEWAY_SVC }} \
+            --region ${{ env.REGION }} \
+            --format 'value(status.url)')
+          echo "Testing: ${URL}/health"
+          for i in 1 2 3; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${URL}/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Gateway health check passed."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Gateway health check failed."
+          exit 1
+
+  # ----------------------------------------------------------
+  # 6. Post-deploy: notify on success/failure
+  # ----------------------------------------------------------
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [deploy-backend, deploy-gateway]
+    if: always()
+    steps:
+      - name: Report status
+        run: |
+          if [ "${{ needs.deploy-backend.result }}" = "success" ] && \
+             [ "${{ needs.deploy-gateway.result }}" = "success" ]; then
+            echo "✅ Sprint deploy succeeded — backend + gateway live in europe-west1"
+          else
+            echo "❌ Deploy failed — backend: ${{ needs.deploy-backend.result }}, gateway: ${{ needs.deploy-gateway.result }}"
+            exit 1
+          fi
