@@ -1,0 +1,130 @@
+{
+  "id": "weekly_social_post",
+  "name": "Wöchentliche Social-Media-Post-Serie",
+  "description": "Generiert wöchentlich Social-Media-Posts aus definierten Content-Templates, rendert sie zu HTML-Karten und Screenshots und verteilt sie über konfigurierte Kanäle (LinkedIn, Twitter/X, Mastodon). KI erstellt passende Begleittexte und Hashtags.",
+  "version": "1.0.0",
+  "trigger": {
+    "type": "cron",
+    "expression": "0 9 * * 1",
+    "timezone": "Europe/Berlin",
+    "enabled": true
+  },
+  "timeout_seconds": 600,
+  "eu_risk_level": "limited",
+  "tags": ["social-media", "content", "weekly", "marketing"],
+  "params": {
+    "content_base_dir": "/opt/content/social",
+    "output_base_dir":  "/opt/rendered/social",
+    "post_channels":    ["linkedin", "twitter"],
+    "language":         "de",
+    "tone":             "professional"
+  },
+  "steps": [
+    {
+      "id": "step_1_select_content",
+      "name": "Content-Template auswählen",
+      "type": "db_query",
+      "config": {
+        "query": "SELECT id, title, content_file, channel, scheduled_at FROM social_posts WHERE status = 'pending' AND scheduled_at <= NOW() + INTERVAL '7 days' ORDER BY priority DESC, scheduled_at ASC LIMIT 5",
+        "output_format": "array"
+      },
+      "output_var": "pending_posts",
+      "on_empty": "skip_to_end"
+    },
+    {
+      "id": "step_2_ai_enhance_content",
+      "name": "Content KI-optimieren",
+      "type": "ai_analyze",
+      "depends_on": ["step_1_select_content"],
+      "for_each": "pending_posts",
+      "loop_var": "post",
+      "config": {
+        "model": "gpt-4o",
+        "prompt_template": "Erstelle für folgenden Markdown-Content einen optimierten Social-Media-Post für {{post.channel}} auf Deutsch.\n\nTitel: {{post.title}}\nContent:\n{{post.content_preview}}\n\nAnforderungen:\n- Ton: professionell, aber nahbar\n- Länge: LinkedIn max. 1300 Zeichen, Twitter max. 270 Zeichen\n- 3-5 relevante Hashtags am Ende\n- Call-to-Action einbauen\n- Keine generischen Phrasen\n\nAntworte als JSON: {\"caption\": \"...\", \"hashtags\": [...], \"cta\": \"...\"}",
+        "max_tokens": 800,
+        "temperature": 0.7,
+        "response_format": "json"
+      },
+      "output_var": "enhanced_posts"
+    },
+    {
+      "id": "step_3_render_html",
+      "name": "HTML-Karte rendern",
+      "type": "openclaw_execute",
+      "depends_on": ["step_2_ai_enhance_content"],
+      "for_each": "enhanced_posts",
+      "loop_var": "epost",
+      "config": {
+        "script": "social_media_render.sh",
+        "params": {
+          "CONTENT_FILE": "{{epost.content_file}}",
+          "OUTPUT_DIR": "{{params.output_base_dir}}/{{epost.id}}"
+        },
+        "timeout_seconds": 120
+      },
+      "output_var": "rendered_assets"
+    },
+    {
+      "id": "step_4_publish",
+      "name": "Posts veröffentlichen",
+      "type": "http_request",
+      "depends_on": ["step_3_render_html"],
+      "for_each": "rendered_assets",
+      "loop_var": "asset",
+      "config": {
+        "endpoint": "{{context.social_api_base}}/publish",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer {{secrets.social_api_key}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "channel": "{{asset.channel}}",
+          "caption": "{{asset.caption}}",
+          "hashtags": "{{asset.hashtags}}",
+          "image_path": "{{asset.screenshot_file}}",
+          "schedule_at": "{{asset.scheduled_at}}"
+        },
+        "timeout_seconds": 30
+      },
+      "output_var": "publish_results"
+    },
+    {
+      "id": "step_5_update_db",
+      "name": "Status in DB aktualisieren",
+      "type": "db_write",
+      "depends_on": ["step_4_publish"],
+      "for_each": "publish_results",
+      "loop_var": "result",
+      "config": {
+        "query": "UPDATE social_posts SET status = '{{result.success ? \"published\" : \"failed\"}}', published_at = NOW(), external_post_id = '{{result.post_id}}' WHERE id = '{{result.source_id}}'"
+      }
+    },
+    {
+      "id": "step_6_summary_notification",
+      "name": "Zusammenfassung versenden",
+      "type": "notification",
+      "depends_on": ["step_5_update_db"],
+      "config": {
+        "channels": ["slack"],
+        "slack": {
+          "channel": "#marketing",
+          "message_template": ":mega: *Weekly Social Post Report*\n{{publish_results.length}} Posts veröffentlicht\n{{#each publish_results}}\n• {{this.channel}}: {{this.success ? 'Erfolg' : 'Fehler'}} — {{this.post_id}}\n{{/each}}"
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "slack_channel": "#marketing",
+    "email_recipients": ["marketing@example.com"],
+    "on_success": true,
+    "on_failure": true,
+    "on_warning": false
+  },
+  "metadata": {
+    "created_by": "marketing-team",
+    "created_at": "2025-01-01T00:00:00Z",
+    "updated_at": "2025-01-01T00:00:00Z",
+    "documentation_url": "https://docs.internal/playbooks/weekly_social_post"
+  }
+}

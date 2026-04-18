@@ -1,0 +1,171 @@
+{
+  "id": "log_anomaly_alert",
+  "name": "Log-Anomalie-Alert",
+  "description": "Scannt alle 4 Stunden die Systemlogs auf kritische Fehlermuster. Bei Überschreitung von Schwellenwerten wird eine KI-gestützte Root-Cause-Analyse durchgeführt und das Operations-Team sofort benachrichtigt.",
+  "version": "1.0.0",
+  "trigger": {
+    "type": "cron",
+    "expression": "0 */4 * * *",
+    "timezone": "UTC",
+    "enabled": true
+  },
+  "timeout_seconds": 180,
+  "eu_risk_level": "minimal",
+  "tags": ["logs", "anomaly", "alert", "monitoring"],
+  "thresholds": {
+    "total_errors_warning":  10,
+    "total_errors_critical": 50,
+    "single_pattern_warning": 5,
+    "single_pattern_critical": 20
+  },
+  "steps": [
+    {
+      "id": "step_1_scan_logs",
+      "name": "Log-Anomalie-Scan ausführen",
+      "type": "openclaw_execute",
+      "config": {
+        "script": "log_anomaly_scan.sh",
+        "params": {
+          "LOG_DIR":  "/var/log",
+          "HOURS":    "4",
+          "PATTERNS": "ERROR|CRITICAL|FATAL|PANIC|EMERG|OOM"
+        },
+        "timeout_seconds": 90,
+        "stream": false
+      },
+      "output_var": "scan_result",
+      "on_failure": "abort",
+      "retry": {
+        "attempts": 2,
+        "delay_seconds": 15
+      }
+    },
+    {
+      "id": "step_2_evaluate_thresholds",
+      "name": "Schwellenwerte prüfen",
+      "type": "condition",
+      "depends_on": ["step_1_scan_logs"],
+      "conditions": [
+        {
+          "id": "cond_critical",
+          "expression": "scan_result.total_errors >= thresholds.total_errors_critical || scan_result.top_errors.some(e => e.count >= thresholds.single_pattern_critical)",
+          "label": "Kritische Fehleranzahl überschritten",
+          "output_severity": "critical"
+        },
+        {
+          "id": "cond_warning",
+          "expression": "scan_result.total_errors >= thresholds.total_errors_warning || scan_result.top_errors.some(e => e.count >= thresholds.single_pattern_warning)",
+          "label": "Warn-Schwelle überschritten",
+          "output_severity": "warning"
+        },
+        {
+          "id": "cond_ok",
+          "expression": "scan_result.total_errors < thresholds.total_errors_warning",
+          "label": "Keine signifikanten Anomalien",
+          "output_severity": "ok"
+        }
+      ],
+      "output_var": "severity"
+    },
+    {
+      "id": "step_3_skip_if_ok",
+      "name": "Abbruch bei unauffälligem Scan",
+      "type": "early_exit",
+      "depends_on": ["step_2_evaluate_thresholds"],
+      "run_if": "severity === 'ok'",
+      "config": {
+        "message": "Kein Handlungsbedarf — Fehleranzahl unter Schwellenwert.",
+        "exit_status": "success"
+      }
+    },
+    {
+      "id": "step_4_ai_root_cause",
+      "name": "KI-Root-Cause-Analyse",
+      "type": "ai_analyze",
+      "depends_on": ["step_3_skip_if_ok"],
+      "config": {
+        "model": "gpt-4o",
+        "prompt_template": "Du bist ein erfahrener Site-Reliability-Engineer. Analysiere folgende Log-Anomalie-Daten und erstelle eine Root-Cause-Analyse.\n\nHost: {{scan_result.hostname}}\nScan-Zeitraum: letzte {{scan_result.scan_window_hours}} Stunden\nGescannte Dateien: {{scan_result.scanned_files}}\nGesamtfehler: {{scan_result.total_errors}}\nSchweregrad: {{severity}}\n\nTop-Fehler:\n{{#each scan_result.top_errors}}\n- Pattern: {{this.pattern}} | Anzahl: {{this.count}} | Datei: {{this.file}} | Zuletzt: {{this.last_seen}}\n{{/each}}\n\nErstelle eine strukturierte Analyse als Markdown:\n## Schweregrad-Bewertung\n## Betroffene Komponenten\n## Wahrscheinliche Ursachen (nach Priorität)\n## Sofortmaßnahmen\n## Präventive Maßnahmen",
+        "max_tokens": 2000,
+        "temperature": 0.15
+      },
+      "output_var": "root_cause_analysis"
+    },
+    {
+      "id": "step_5_create_incident",
+      "name": "Incident-Ticket erstellen (bei Critical)",
+      "type": "http_request",
+      "depends_on": ["step_4_ai_root_cause"],
+      "run_if": "severity === 'critical'",
+      "config": {
+        "endpoint": "{{secrets.incident_api_url}}/incidents",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer {{secrets.incident_api_key}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "title": "Log-Anomalie CRITICAL — {{scan_result.hostname}}",
+          "severity": "{{severity}}",
+          "description": "{{root_cause_analysis}}",
+          "source": "openclaw-log-anomaly-alert",
+          "tags": ["auto-created", "log-anomaly", "openclaw"],
+          "metadata": {
+            "total_errors": "{{scan_result.total_errors}}",
+            "top_pattern":  "{{scan_result.top_errors[0].pattern}}",
+            "hostname":     "{{scan_result.hostname}}"
+          }
+        }
+      },
+      "output_var": "incident_result"
+    },
+    {
+      "id": "step_6_notify",
+      "name": "Alert-Benachrichtigung",
+      "type": "notification",
+      "depends_on": ["step_5_create_incident"],
+      "config": {
+        "channels": ["slack", "email", "pagerduty"],
+        "slack": {
+          "channel": "#ops-alerts",
+          "urgency": "{{severity === 'critical' ? 'high' : 'normal'}}",
+          "message_template": "{{severity === 'critical' ? ':rotating_light:' : ':warning:'}} *Log-Anomalie {{severity | upper}} — {{scan_result.hostname}}*\n\n*Fehler gesamt:* {{scan_result.total_errors}} (letzte {{scan_result.scan_window_hours}}h)\n*Top-Pattern:* `{{scan_result.top_errors[0].pattern}}` — {{scan_result.top_errors[0].count}}x in `{{scan_result.top_errors[0].file}}`\n\n{{#if incident_result.id}}*Incident-Ticket:* <{{secrets.incident_base_url}}/{{incident_result.id}}|#{{incident_result.id}}>{{/if}}\n\n*KI-Analyse (Kurzfassung):*\n{{root_cause_analysis | truncate: 500}}"
+        },
+        "email": {
+          "to": ["{{notifications.email_recipients}}"],
+          "subject": "[{{severity | upper}}] Log-Anomalie: {{scan_result.hostname}} — {{scan_result.total_errors}} Fehler",
+          "template": "log_anomaly_alert",
+          "variables": {
+            "severity":            "{{severity}}",
+            "hostname":            "{{scan_result.hostname}}",
+            "total_errors":        "{{scan_result.total_errors}}",
+            "scan_window_hours":   "{{scan_result.scan_window_hours}}",
+            "top_errors":          "{{scan_result.top_errors}}",
+            "root_cause_analysis": "{{root_cause_analysis}}",
+            "incident_id":         "{{incident_result.id}}"
+          }
+        },
+        "pagerduty": {
+          "enabled": "{{severity === 'critical'}}",
+          "service_key": "{{secrets.pagerduty_service_key}}",
+          "severity": "critical",
+          "summary": "Log CRITICAL: {{scan_result.total_errors}} Fehler auf {{scan_result.hostname}}"
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "email_recipients": ["ops@example.com", "sre@example.com"],
+    "slack_channel":    "#ops-alerts",
+    "on_success":       false,
+    "on_failure":       true,
+    "on_warning":       true,
+    "on_critical":      true
+  },
+  "metadata": {
+    "created_by": "sre-team",
+    "created_at": "2025-01-01T00:00:00Z",
+    "updated_at": "2025-01-01T00:00:00Z",
+    "documentation_url": "https://docs.internal/playbooks/log_anomaly_alert"
+  }
+}

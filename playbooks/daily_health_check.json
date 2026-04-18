@@ -1,0 +1,145 @@
+{
+  "id": "daily_health_check",
+  "name": "Täglicher System-Health-Check",
+  "description": "Führt täglich um 06:00 UTC einen vollständigen System-Health-Check durch. Analysiert CPU, RAM, Disk und kritische Services. Bei Anomalien wird eine AI-gestützte Diagnose erstellt und per E-Mail versendet.",
+  "version": "1.0.0",
+  "trigger": {
+    "type": "cron",
+    "expression": "0 6 * * *",
+    "timezone": "UTC",
+    "enabled": true
+  },
+  "timeout_seconds": 300,
+  "eu_risk_level": "minimal",
+  "tags": ["health", "monitoring", "daily"],
+  "steps": [
+    {
+      "id": "step_1_execute_health_check",
+      "name": "System Health Check ausführen",
+      "type": "openclaw_execute",
+      "config": {
+        "script": "system_health_check.sh",
+        "params": {
+          "verbose": false
+        },
+        "timeout_seconds": 60,
+        "stream": false
+      },
+      "output_var": "health_result",
+      "on_failure": "abort",
+      "retry": {
+        "attempts": 2,
+        "delay_seconds": 10
+      }
+    },
+    {
+      "id": "step_2_parse_and_evaluate",
+      "name": "Ergebnisse auswerten",
+      "type": "condition",
+      "depends_on": ["step_1_execute_health_check"],
+      "conditions": [
+        {
+          "id": "cond_cpu_high",
+          "expression": "health_result.cpu_percent > 85",
+          "label": "CPU-Auslastung kritisch"
+        },
+        {
+          "id": "cond_disk_high",
+          "expression": "health_result.disk_used_percent > 90",
+          "label": "Disk-Auslastung kritisch"
+        },
+        {
+          "id": "cond_service_down",
+          "expression": "health_result.services.some(s => s.status !== 'active')",
+          "label": "Service ausgefallen"
+        },
+        {
+          "id": "cond_errors_found",
+          "expression": "health_result.recent_errors.length > 0",
+          "label": "Systemfehler in Logs"
+        }
+      ],
+      "output_var": "anomalies_detected"
+    },
+    {
+      "id": "step_3_ai_diagnosis",
+      "name": "AI-Diagnose erstellen",
+      "type": "ai_analyze",
+      "depends_on": ["step_2_parse_and_evaluate"],
+      "run_if": "anomalies_detected === true",
+      "config": {
+        "model": "gpt-4o",
+        "prompt_template": "Du bist ein DevOps-Experte. Analysiere die folgenden System-Health-Daten und erstelle eine präzise Diagnose mit konkreten Handlungsempfehlungen.\n\nHost: {{health_result.hostname}}\nTimestamp: {{health_result.timestamp}}\nCPU: {{health_result.cpu_percent}}%\nRAM: {{health_result.ram_used_gb}} / {{health_result.ram_total_gb}} GB\nDisk: {{health_result.disk_used_percent}}%\nServices: {{health_result.services}}\nFehler: {{health_result.recent_errors}}\n\nGib Antwort als strukturiertes Markdown mit Abschnitten: ## Befund, ## Ursache (mögliche), ## Sofortmaßnahmen, ## Langfristige Empfehlungen",
+        "max_tokens": 1500,
+        "temperature": 0.2
+      },
+      "output_var": "ai_diagnosis"
+    },
+    {
+      "id": "step_4_send_notification",
+      "name": "Benachrichtigung versenden",
+      "type": "notification",
+      "depends_on": ["step_3_ai_diagnosis"],
+      "config": {
+        "channels": ["email", "slack"],
+        "email": {
+          "to": ["{{notifications.email_recipients}}"],
+          "subject": "[{{severity}}] Health-Check: {{health_result.hostname}} — {{health_result.timestamp}}",
+          "template": "health_check_report",
+          "variables": {
+            "hostname": "{{health_result.hostname}}",
+            "cpu": "{{health_result.cpu_percent}}",
+            "ram_used": "{{health_result.ram_used_gb}}",
+            "ram_total": "{{health_result.ram_total_gb}}",
+            "disk": "{{health_result.disk_used_percent}}",
+            "services": "{{health_result.services}}",
+            "diagnosis": "{{ai_diagnosis}}",
+            "anomalies": "{{anomalies_detected}}"
+          }
+        },
+        "slack": {
+          "channel": "#ops-alerts",
+          "message_template": ":white_check_mark: *Daily Health-Check — {{health_result.hostname}}*\nCPU: {{health_result.cpu_percent}}% | RAM: {{health_result.ram_used_gb}}/{{health_result.ram_total_gb}} GB | Disk: {{health_result.disk_used_percent}}%\n{{#if anomalies_detected}}:warning: Anomalien erkannt — siehe E-Mail für Details.{{else}}Alles im grünen Bereich.{{/if}}"
+        }
+      },
+      "severity_rules": {
+        "critical": "health_result.cpu_percent > 95 || health_result.disk_used_percent > 95",
+        "warning":  "health_result.cpu_percent > 85 || health_result.disk_used_percent > 90",
+        "info":     "true"
+      }
+    },
+    {
+      "id": "step_5_store_metrics",
+      "name": "Metriken in Datenbank speichern",
+      "type": "db_write",
+      "depends_on": ["step_1_execute_health_check"],
+      "config": {
+        "table": "health_metrics",
+        "data": {
+          "tenant_id": "{{context.tenant_id}}",
+          "gateway_id": "{{context.gateway_id}}",
+          "hostname": "{{health_result.hostname}}",
+          "cpu_percent": "{{health_result.cpu_percent}}",
+          "ram_used_gb": "{{health_result.ram_used_gb}}",
+          "ram_total_gb": "{{health_result.ram_total_gb}}",
+          "disk_used_percent": "{{health_result.disk_used_percent}}",
+          "services_json": "{{health_result.services}}",
+          "recorded_at": "{{health_result.timestamp}}"
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "email_recipients": ["ops@example.com", "admin@example.com"],
+    "slack_webhook": "https://hooks.slack.com/services/REPLACE_ME",
+    "on_success": false,
+    "on_failure": true,
+    "on_warning": true
+  },
+  "metadata": {
+    "created_by": "system",
+    "created_at": "2025-01-01T00:00:00Z",
+    "updated_at": "2025-01-01T00:00:00Z",
+    "documentation_url": "https://docs.internal/playbooks/daily_health_check"
+  }
+}
