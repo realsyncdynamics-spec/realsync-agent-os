@@ -1,6 +1,6 @@
 # ============================================================
-# RealSync Agent-OS — Cloud Run Deploy Pipeline v3
-# Sprint 7: DB Migration Job vor Backend-Deploy eingebaut.
+# RealSync Agent-OS — Cloud Run Deploy Pipeline v4
+# Sprint 9: YAML syntax fixed, sprint label updated to 9.
 # ============================================================
 name: Deploy to Cloud Run
 
@@ -50,14 +50,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install
+      - name: Install dependencies
+        run: npm install
         working-directory: backend
-      - run: npm run lint --if-present
-            continue-on-error: true
+      - name: Lint
+        run: npm run lint --if-present
         working-directory: backend
-      - run: npm test --if-present
+        continue-on-error: true
+      - name: Test
+        run: npm test --if-present
         working-directory: backend
-─────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────
 # 2. Build Backend Image
 # ──────────────────────────────────────────────────────────────
   build-backend:
@@ -85,6 +89,7 @@ jobs:
       - name: Build
         run: |
           docker build \
+            --target production \
             --tag $IMAGE:${{ github.sha }} \
             --tag $IMAGE:latest \
             --label "git.sha=${{ github.sha }}" \
@@ -125,7 +130,10 @@ jobs:
           echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
       - name: Build & Push
         run: |
-          docker build --tag $IMAGE:${{ github.sha }} --tag $IMAGE:latest ./gateway
+          docker build \
+            --tag $IMAGE:${{ github.sha }} \
+            --tag $IMAGE:latest \
+            ./gateway
           docker push $IMAGE:${{ github.sha }}
           docker push $IMAGE:latest
 
@@ -148,7 +156,6 @@ jobs:
 
       - name: Create or update Cloud Run Job
         run: |
-          # Create/update a Cloud Run Job that runs migrate.js
           if gcloud run jobs describe ${{ env.DB_INIT_JOB }} \
               --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }} &>/dev/null; then
             gcloud run jobs update ${{ env.DB_INIT_JOB }} \
@@ -250,7 +257,7 @@ jobs:
             --timeout 300 \
             --concurrency 80 \
             --service-account "${{ secrets.GCP_DEPLOY_SA }}" \
-            --labels "sprint=7,eu-ai-act=compliant,managed-by=github-actions"
+            --labels "sprint=9,eu-ai-act=compliant,managed-by=github-actions"
 
       - name: Get service URL
         id: url
@@ -334,7 +341,7 @@ jobs:
             --port 8443 \
             --timeout 120 \
             --service-account "${{ secrets.GCP_DEPLOY_SA }}" \
-            --labels "sprint=7,managed-by=github-actions"
+            --labels "sprint=9,managed-by=github-actions"
 
       - name: Gateway smoke test
         run: |
@@ -362,11 +369,11 @@ jobs:
           B="${{ needs.deploy-backend.result }}"
           G="${{ needs.deploy-gateway.result }}"
           if [ "$B" = "success" ] && [ "$G" = "success" ]; then
-            echo "✅ Sprint 7 deploy complete — backend + gateway live in ${{ env.REGION }}"
-            echo "## 🚀 Deploy Complete" >> $GITHUB_STEP_SUMMARY
-            echo "Backend ✅ | Gateway ✅ | Migrations ✅ | Workers enabled ✅" >> $GITHUB_STEP_SUMMARY
+            echo "Sprint 9 deploy complete — backend + gateway live in ${{ env.REGION }}"
+            echo "## Deploy Complete" >> $GITHUB_STEP_SUMMARY
+            echo "Backend OK | Gateway OK | Migrations OK | Workers enabled" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Deploy incomplete — backend: $B, gateway: $G"
-            echo "## ❌ Deploy Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Deploy incomplete — backend: $B, gateway: $G"
+            echo "## Deploy Failed" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi

@@ -1,6 +1,6 @@
 # RealSync Agent-OS — Cloud Run Deploy Guide
 
-**Infrastruktur-Realität:** Nichts gilt als fertig, bevor es live getestet wurde.
+> **Infrastruktur-Realität:** Nichts gilt als fertig, bevor es live getestet wurde.
 
 ---
 
@@ -12,201 +12,251 @@
 | `gh` CLI | latest | `gh version` |
 | Docker | 24+ | `docker version` |
 | Node.js | 20 LTS | `node --version` |
+| `jq` | any | `jq --version` |
+| `openssl` | any | `openssl version` |
 
 ---
 
-## Schritt 1 — GCP einrichten (einmalig)
+## Sprint 9 — Erster Live-Deploy (5 Befehle)
+
+Das ist der einzige manuelle Schritt. Alles andere erledigt `bootstrap_deploy.sh` automatisch.
+
+### Schritt 1 — Authentifizieren
 
 ```bash
-# GCP Project ID setzen (ersetze mit deiner echten Project ID)
-export GCP_PROJECT_ID=realsync-prod-001
-
-# Setup-Script ausführen
-bash scripts/gcp_setup.sh
+gcloud auth login
+gh auth login
 ```
 
-Das Script erledigt automatisch:
-- Cloud Run, Artifact Registry, Secret Manager, IAM APIs aktivieren
+### Schritt 2 — Pflicht-Variablen setzen
+
+```bash
+export GCP_PROJECT_ID="realsync-prod-001"          # deine GCP Project ID
+
+export DATABASE_URL="postgresql://USER:PASS@HOST/DB"  # Cloud SQL oder Neon/Supabase
+export REDIS_URL="redis://default:PASS@HOST:6379"     # Memorystore oder Upstash
+
+export OPENAI_API_KEY="sk-..."
+export STRIPE_SECRET_KEY="sk_live_..."     # sk_test_... für Staging
+export STRIPE_WEBHOOK_SECRET="whsec_..."
+```
+
+### Schritt 3 — Bootstrap ausführen
+
+```bash
+bash scripts/bootstrap_deploy.sh
+```
+
+Was das Script automatisch erledigt:
+- GCP APIs aktivieren (Cloud Run, Artifact Registry, Secret Manager, IAM)
 - Artifact Registry Repository `realsync-agent-os` anlegen
-- Deployer Service Account `realsync-deployer@...` erstellen
-- IAM-Rollen zuweisen: `run.admin`, `artifactregistry.writer`, `secretAccessor`, `serviceAccountUser`
-- Secret Manager Platzhalter für alle 11 Secrets anlegen
-- Service Account JSON Key ausgeben
+- Deployer Service Account `realsync-deployer@...` + IAM-Rollen
+- Alle 11 Secrets in Secret Manager befüllen
+- GitHub Secrets `GCP_PROJECT_ID`, `GCP_SA_KEY`, `GCP_DEPLOY_SA` setzen
+- GitHub Environment `production` anlegen
+- Ersten Deploy via leerem Commit triggern
+
+### Schritt 4 — Pipeline freigeben
+
+1. [GitHub Actions öffnen](https://github.com/realsyncdynamics-spec/realsync-agent-os/actions)
+2. Laufenden Workflow anklicken
+3. **"Review deployments"** → `production` → **"Approve and deploy"**
+4. Warten bis alle 7 Jobs grün sind (~8–12 min)
+
+### Schritt 5 — Smoke-Test
+
+```bash
+bash scripts/smoke_test.sh \
+  $(gcloud run services describe realsync-backend \
+    --region europe-west1 \
+    --format 'value(status.url)')
+```
+
+Erwartet: 6/6 Tests grün, alle HTTP 200, Antwortzeit < 2 s.
 
 ---
 
-## Schritt 2 — GitHub Secrets setzen
-
-In deinem GitHub Repo → **Settings → Secrets and variables → Actions**:
-
-| Secret Name | Wert | Quelle |
-|---|---|---|
-| `GCP_PROJECT_ID` | deine GCP Project ID | z.B. `realsync-prod-001` |
-| `GCP_SA_KEY` | JSON-Inhalt des SA-Keys | Ausgabe von `gcp_setup.sh` |
-| `GCP_DEPLOY_SA` | `realsync-deployer@{PROJECT_ID}.iam.gserviceaccount.com` | Ausgabe von `gcp_setup.sh` |
+## Lokaler Stack (vor dem Deploy)
 
 ```bash
-# Alternativ via gh CLI:
-gh secret set GCP_PROJECT_ID --body "realsync-prod-001"
-gh secret set GCP_SA_KEY < /tmp/realsync-sa-key-*.json
-gh secret set GCP_DEPLOY_SA --body "realsync-deployer@realsync-prod-001.iam.gserviceaccount.com"
+# Vollständigkeit prüfen
+bash scripts/preflight_check.sh
+
+# Stack starten
+docker compose up -d
+
+# Mit SMTP-Catcher (Mailpit → http://localhost:8025)
+docker compose --profile dev up -d
+
+# Stack stoppen
+docker compose down -v
 ```
 
 ---
 
-## Schritt 3 — Secret Manager Werte befüllen
+## Externes Datenbank-Setup
 
-Jeden Platzhalter mit dem echten Wert ersetzen:
+### Option A — Neon (empfohlen, kostenlos bis 3 GB)
+
+```
+https://neon.tech → New Project → Europe (Frankfurt) → Connection string kopieren
+Format: postgresql://user:pass@ep-xxx.eu-central-1.aws.neon.tech/neondb?sslmode=require
+```
+
+### Option B — Supabase
+
+```
+https://supabase.com → New project → Frankfurt → Settings → Database → Connection string
+Format: postgresql://postgres:pass@db.xxx.supabase.co:5432/postgres
+```
+
+### Option C — Google Cloud SQL (Produktion)
 
 ```bash
-export PROJECT_ID=realsync-prod-001
+gcloud sql instances create realsync-db \
+  --database-version=POSTGRES_16 \
+  --region=europe-west1 \
+  --tier=db-f1-micro \
+  --storage-size=10GB \
+  --project=$GCP_PROJECT_ID
 
-# Beispiel — DATABASE_URL (Cloud SQL Postgres 16)
-echo -n "postgresql://realsync:PASSWORT@/realsync_db?host=/cloudsql/PROJECT:europe-west1:realsync-db" | \
-  gcloud secrets versions add DATABASE_URL --data-file=- --project=$PROJECT_ID
+gcloud sql users set-password postgres \
+  --instance=realsync-db \
+  --password="SICHERES_PASSWORT" \
+  --project=$GCP_PROJECT_ID
 
-# REDIS_URL (Memorystore oder Upstash)
-echo -n "rediss://default:PASSWORT@DEINE-REDIS-HOST:6380" | \
-  gcloud secrets versions add REDIS_URL --data-file=- --project=$PROJECT_ID
+# Cloud SQL Proxy URL für Cloud Run:
+# postgresql://postgres:PASS@/DATABASE?host=/cloudsql/PROJECT:europe-west1:realsync-db
+```
 
-# JWT_SECRET (mindestens 64 Zeichen zufällig)
-openssl rand -hex 64 | \
-  gcloud secrets versions add JWT_SECRET --data-file=- --project=$PROJECT_ID
+## Externes Redis-Setup
 
-# JWT_REFRESH_SECRET
-openssl rand -hex 64 | \
-  gcloud secrets versions add JWT_REFRESH_SECRET --data-file=- --project=$PROJECT_ID
+### Option A — Upstash (empfohlen, kostenlos bis 10.000 req/Tag)
 
-# AGENT_INTERNAL_KEY (für X-Agent-Key Header)
-openssl rand -hex 32 | \
-  gcloud secrets versions add AGENT_INTERNAL_KEY --data-file=- --project=$PROJECT_ID
+```
+https://upstash.com → Create Database → Frankfurt → TLS aktivieren
+Format: rediss://default:PASS@proud-xxx.upstash.io:6379
+```
 
-# GATEWAY_SECRET
-openssl rand -hex 32 | \
-  gcloud secrets versions add GATEWAY_SECRET --data-file=- --project=$PROJECT_ID
+### Option B — Google Memorystore
 
-# INTERNAL_HEALTH_KEY (für /health/deep Endpoint)
-openssl rand -hex 32 | \
-  gcloud secrets versions add INTERNAL_HEALTH_KEY --data-file=- --project=$PROJECT_ID
-
-# OPENAI_API_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, OPENCLAW_API_KEY
-# → aus den jeweiligen Dashboards kopieren
+```bash
+gcloud redis instances create realsync-redis \
+  --size=1 \
+  --region=europe-west1 \
+  --project=$GCP_PROJECT_ID
+# Erfordert VPC Connector für Cloud Run
 ```
 
 ---
 
-## Schritt 4 — GitHub Environment einrichten
+## Nach dem ersten Deploy
 
-In deinem GitHub Repo → **Settings → Environments → New environment → `production`**:
+### Stripe Webhook registrieren
 
-1. **Required reviewers** → dich selbst hinzufügen
-2. **Deployment branches** → `main` only (Selected branches)
-3. Speichern
+```bash
+# Produktions-Webhook URL eintragen
+# → https://dashboard.stripe.com/webhooks
+# URL: https://DEINE-BACKEND-URL/webhooks/stripe
+# Events: payment_intent.succeeded, customer.subscription.*, invoice.*
+```
 
-> Jeder Deploy auf `main` muss jetzt manuell freigegeben werden — das erfüllt EU AI Act Art. 14 (Human Oversight) für den Deploymentprozess selbst.
+### GitHub Environment absichern
+
+In GitHub → Settings → Environments → production:
+- **Required reviewers**: dich selbst eintragen
+- **Deployment branches**: `main` only
+- **Wait timer**: optional (z.B. 2 min für Überprüfung)
+
+> Jeder Deploy muss manuell freigegeben werden — erfüllt EU AI Act Art. 14 (Human Oversight).
 
 ---
 
-## Schritt 5 — Erster Deploy
+## Monitoring & Logs
 
 ```bash
-# Kleines Update pushen um die Pipeline auszulösen
-cd /path/to/realsync-agent-os
-git commit --allow-empty -m "chore: trigger first Cloud Run deploy"
-git push origin main
-```
+# Backend Logs (live)
+gcloud run services logs tail realsync-backend \
+  --region europe-west1 --project $GCP_PROJECT_ID
 
-Dann in GitHub → **Actions** → laufenden Workflow öffnen → **Review deployments** → `production` freigeben.
+# Gateway Logs
+gcloud run services logs tail realsync-gateway \
+  --region europe-west1 --project $GCP_PROJECT_ID
 
----
+# DB Migration Logs
+gcloud run jobs executions list \
+  --job=realsync-db-migrate \
+  --region=europe-west1 \
+  --project=$GCP_PROJECT_ID
 
-## Smoke-Test nach Deploy
-
-```bash
-# Service URL holen
-export SERVICE_URL=$(gcloud run services describe realsync-backend \
-  --region europe-west1 --format 'value(status.url)')
-
-# Liveness
-curl -sf "$SERVICE_URL/health" | jq .
-
-# Readiness (DB + Redis)
-curl -sf "$SERVICE_URL/health/ready" | jq .
-
-# Auth-Endpoint erreichbar
-curl -sf -X POST "$SERVICE_URL/auth/register" \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"Test1234!","name":"Test","tenantName":"TestCo"}' | jq .
-```
-
-Erwartete Liveness-Antwort:
-```json
-{
-  "status": "ok",
-  "service": "realsync-backend",
-  "version": "1.3.0",
-  "eu_ai_act_compliant": true,
-  "uptime_s": 12,
-  "timestamp": "2026-04-18T21:05:00.000Z"
-}
+# Health-Endpoints
+curl https://BACKEND-URL/health        # Liveness
+curl https://BACKEND-URL/health/ready  # Readiness (DB + Redis)
+curl https://BACKEND-URL/health/deep \
+  -H "X-Health-Key: $INTERNAL_HEALTH_KEY"  # Deep (alle Subsysteme)
 ```
 
 ---
 
 ## Troubleshooting
 
-### Deploy schlägt fehl: "Permission denied on Artifact Registry"
+### "Permission denied on Artifact Registry"
 ```bash
 gcloud projects add-iam-policy-binding $GCP_PROJECT_ID \
   --member="serviceAccount:realsync-deployer@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/artifactregistry.writer"
 ```
 
-### Cloud Run: "Container failed to start"
+### "Container failed to start"
 ```bash
-# Logs in Echtzeit
 gcloud run services logs read realsync-backend \
   --region europe-west1 --project $GCP_PROJECT_ID --limit 50
 ```
 
 ### Health Check schlägt fehl (DB nicht erreichbar)
-- Cloud SQL: Service Account braucht `roles/cloudsql.client`
-- VPC Connector prüfen falls Postgres nicht öffentlich
-- `DATABASE_URL` in Secret Manager prüfen: `gcloud secrets versions access latest --secret=DATABASE_URL`
+```bash
+# Secret prüfen
+gcloud secrets versions access latest \
+  --secret=DATABASE_URL --project=$GCP_PROJECT_ID
+
+# Cloud SQL: Service Account braucht roles/cloudsql.client
+gcloud projects add-iam-policy-binding $GCP_PROJECT_ID \
+  --member="serviceAccount:realsync-deployer@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+```
 
 ### Secret nicht gefunden
 ```bash
-# Alle Secrets auflisten
 gcloud secrets list --project=$GCP_PROJECT_ID
-
-# Spezifischen Wert prüfen
 gcloud secrets versions access latest --secret=JWT_SECRET --project=$GCP_PROJECT_ID
 ```
 
 ---
 
-## Workload Identity Federation (empfohlen für Produktion)
+## Workload Identity Federation (empfohlen nach erstem Deploy)
 
-Wenn JSON-Keys vermieden werden sollen:
+Ersetzt den JSON-SA-Key durch tokenbasierte Authentifizierung — keine langlebigen Keys mehr.
 
 ```bash
-export USE_WORKLOAD_IDENTITY=true
-export GITHUB_REPO=realsyncdynamics-spec/realsync-agent-os
-bash scripts/gcp_setup.sh
+# In terraform/wif.tf bereits vorbereitet
+cd terraform
+terraform init
+terraform apply -target=google_iam_workload_identity_pool.github
 ```
 
-Dann in `.github/workflows/deploy.yml` die auskommentierten WIF-Zeilen aktivieren.
+Dann in `.github/workflows/deploy.yml` die auskommentierten WIF-Zeilen aktivieren und `GCP_SA_KEY` aus GitHub Secrets löschen.
 
 ---
 
-## Kostenübersicht (Schätzung)
+## Kostenübersicht (Schätzung europe-west1)
 
-| Ressource | Menge | Monatlich (geschätzt) |
+| Ressource | Konfiguration | Monatlich |
 |---|---|---|
-| Cloud Run Backend | 0-10 Instanzen, 512Mi | €0–15 |
-| Cloud Run Gateway | 0-5 Instanzen, 256Mi | €0–8 |
+| Cloud Run Backend | 0–10 Instanzen, 512 Mi | €0–15 |
+| Cloud Run Gateway | 0–5 Instanzen, 256 Mi | €0–8 |
 | Artifact Registry | ~2 GB Images | ~€0.20 |
 | Secret Manager | 11 Secrets | ~€0.06 |
-| **Gesamt** | | **€0–25/Monat** |
+| **Gesamt bei 0 Traffic** | | **~€0.26** |
+| **Gesamt bei aktivem Betrieb** | | **€5–25** |
 
-> Kosten steigen linear mit Traffic. Bei 0 Requests: ~€0.26/Monat (Storage only).
+> Kosten steigen linear mit Traffic. Cold-Start nach Inaktivität: ~2 s (Node.js auf Alpine).
