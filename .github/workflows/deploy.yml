@@ -50,8 +50,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
       - run: npm ci
         working-directory: backend
       - run: npm run lint --if-present
