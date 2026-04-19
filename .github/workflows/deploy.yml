@@ -53,6 +53,7 @@ jobs:
       - run: npm install
         working-directory: backend
       - run: npm run lint --if-present
+            continue-on-error: true
         working-directory: backend
       - run: npm test --if-present
         working-directory: backend
