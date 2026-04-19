@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Genehmigungsanfrage – RealSync Agent-OS</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F5F5F5;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;">
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#F5F5F5;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+
+        <!-- Card -->
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0"
+               style="max-width:600px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td align="center" style="background-color:#01696F;padding:28px 40px 24px;">
+              <span style="display:inline-block;font-size:24px;font-weight:700;letter-spacing:0.04em;color:#ffffff;font-family:Arial,Helvetica,sans-serif;">
+                RealSync Agent-OS
+              </span>
+              <br />
+              <span style="display:inline-block;font-size:11px;font-weight:400;color:#b2e0e2;letter-spacing:0.12em;text-transform:uppercase;margin-top:5px;font-family:Arial,Helvetica,sans-serif;">
+                Genehmigungsworkflow
+              </span>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#0C4E54;height:4px;font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:32px 40px 28px;">
+
+              <!-- Title -->
+              <p style="margin:0 0 4px;font-size:20px;font-weight:700;color:#0C4E54;font-family:Arial,Helvetica,sans-serif;">
+                Genehmigung erforderlich
+              </p>
+              <p style="margin:0 0 20px;font-size:16px;color:#333333;font-family:Arial,Helvetica,sans-serif;">
+                {{action_title}}
+              </p>
+
+              <!-- Meta info -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+                     style="border:1px solid #E0E0E0;border-radius:6px;overflow:hidden;margin-bottom:20px;">
+                <tr>
+                  <td width="40%" style="padding:11px 16px;font-size:13px;color:#888888;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;background-color:#FAFAFA;">
+                    Angefordert von
+                  </td>
+                  <td style="padding:11px 16px;font-size:13px;font-weight:600;color:#222222;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">
+                    {{requester}}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:11px 16px;font-size:13px;color:#888888;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;background-color:#FAFAFA;">
+                    Risikostufe
+                  </td>
+                  <td style="padding:11px 16px;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">
+                    <span style="display:inline-block;font-size:12px;font-weight:700;color:#ffffff;background-color:#E67E22;border-radius:3px;padding:2px 10px;letter-spacing:0.06em;text-transform:uppercase;">
+                      {{risk_level}}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:11px 16px;font-size:13px;color:#888888;font-family:Arial,Helvetica,sans-serif;background-color:#FAFAFA;">
+                    Läuft ab
+                  </td>
+                  <td style="padding:11px 16px;font-size:13px;font-weight:600;color:#C0392B;font-family:Arial,Helvetica,sans-serif;">
+                    {{expires_at}}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Description -->
+              <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:#888888;text-transform:uppercase;letter-spacing:0.08em;font-family:Arial,Helvetica,sans-serif;">
+                Beschreibung
+              </p>
+              <p style="margin:0 0 24px;font-size:14px;color:#444444;line-height:1.65;font-family:Arial,Helvetica,sans-serif;background-color:#F9F9F9;border-radius:4px;padding:14px 16px;border:1px solid #EBEBEB;">
+                {{description}}
+              </p>
+
+              <!-- EU AI Disclosure -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:28px;">
+                <tr>
+                  <td style="background-color:#F0F8F8;border:1px solid #C8E6E7;border-radius:6px;padding:14px 16px;">
+                    <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#01696F;text-transform:uppercase;letter-spacing:0.10em;font-family:Arial,Helvetica,sans-serif;">
+                      KI-Transparenz (EU AI Act Art. 14 &amp; 22)
+                    </p>
+                    <p style="margin:0;font-size:13px;color:#444444;line-height:1.55;font-family:Arial,Helvetica,sans-serif;">
+                      {{eu_ai_disclosure}}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Buttons -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td width="48%" valign="top">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                      <tr>
+                        <td align="center" style="border-radius:6px;background-color:#01696F;">
+                          <a href="{{approve_url}}"
+                             style="display:block;padding:14px 20px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;text-align:center;border-radius:6px;font-family:Arial,Helvetica,sans-serif;">
+                            &#x2713;&nbsp; Genehmigen
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="4%">&nbsp;</td>
+                  <td width="48%" valign="top">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                      <tr>
+                        <td align="center" style="border-radius:6px;background-color:#ffffff;border:2px solid #C0392B;">
+                          <a href="{{reject_url}}"
+                             style="display:block;padding:12px 20px;font-size:15px;font-weight:700;color:#C0392B;text-decoration:none;text-align:center;border-radius:4px;font-family:Arial,Helvetica,sans-serif;">
+                            &#x2715;&nbsp; Ablehnen
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:16px 0 0;font-size:12px;color:#999999;line-height:1.6;font-family:Arial,Helvetica,sans-serif;">
+                Genehmigen: <a href="{{approve_url}}" style="color:#01696F;word-break:break-all;">{{approve_url}}</a><br />
+                Ablehnen: <a href="{{reject_url}}" style="color:#C0392B;word-break:break-all;">{{reject_url}}</a>
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color:#F5F5F5;border-top:1px solid #E0E0E0;padding:20px 40px;">
+              <p style="margin:0;font-size:11px;color:#999999;text-align:center;line-height:1.6;font-family:Arial,Helvetica,sans-serif;">
+                RealSync Agent-OS &nbsp;|&nbsp; EU AI Act konform &nbsp;|&nbsp;
+                <a href="#" style="color:#01696F;text-decoration:none;">Datenschutz</a>
+                &nbsp;|&nbsp;
+                <a href="#" style="color:#01696F;text-decoration:none;">Abbestellen</a>
+              </p>
+              <p style="margin:8px 0 0;font-size:11px;color:#bbbbbb;text-align:center;font-family:Arial,Helvetica,sans-serif;">
+                &copy; RealSyncDynamics GmbH &middot; Alle Rechte vorbehalten
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

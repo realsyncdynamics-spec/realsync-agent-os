@@ -1,511 +1,360 @@
 'use strict';
 
 /**
- * RealSyncDynamics — Stripe Webhook Handler
- * Verarbeitet alle eingehenden Stripe-Events.
+ * Stripe Webhook Handler
+ * RealSyncDynamics Agent-OS
  *
- * WICHTIG: Dieser Router muss BEFORE bodyParser.json() eingebunden werden,
- * damit der raw body für die Signatur-Verifikation verfügbar ist.
- *
- * Einbindung in app.js:
- *   app.use('/stripe/webhook', require('./routes/stripe-webhook'));
- *   app.use(express.json()); // bodyParser DANACH
+ * Raw body parsing is applied in app.js before this route.
+ * Stripe signature is verified immediately; async processing runs in background.
  */
 
 const express = require('express');
+const stripe = require('../config/stripe');
+const pool = require('../db');
+const { getPlanByPriceId } = require('../config/plans');
+
 const router = express.Router();
-const Stripe = require('stripe');
-const db = require('../db');
-const { PLANS, getPlanByStripePriceId } = require('../config/plans');
-
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2024-06-20',
-});
 
 // ---------------------------------------------------------------------------
-// Idempotenz: Set der bereits verarbeiteten Event-IDs (In-Memory)
-// In Produktion: Redis oder DB-Tabelle `processed_events` verwenden.
+// Helper: map Stripe price IDs (from env) to internal plan names
 // ---------------------------------------------------------------------------
-const processedEvents = new Set();
-
-// ---------------------------------------------------------------------------
-// Hilfsfunktionen
-// ---------------------------------------------------------------------------
-
-/**
- * Schreibt einen Eintrag in audit_logs.
- */
-async function writeAuditLog(tenantId, eventType, details, stripeEventId) {
+function priceIdToPlan(priceId) {
+  if (!priceId) return null;
+  if (priceId === process.env.STRIPE_STARTER_PRICE_ID)      return 'starter';
+  if (priceId === process.env.STRIPE_PROFESSIONAL_PRICE_ID) return 'professional';
+  if (priceId === process.env.STRIPE_ENTERPRISE_PRICE_ID)   return 'enterprise';
+  // Fallback: try plans config
   try {
-    await db.query(
-      `INSERT INTO audit_logs (tenant_id, event_type, details, stripe_event_id, created_at)
-       VALUES ($1, $2, $3, $4, NOW())`,
-      [tenantId, eventType, JSON.stringify(details), stripeEventId || null]
-    );
-  } catch (err) {
-    // Audit-Log Fehler darf Webhook-Verarbeitung nicht blockieren
-    console.error('[Webhook] Audit-Log Fehler:', err.message);
+    return getPlanByPriceId(priceId) || null;
+  } catch (_) {
+    return null;
   }
 }
 
-/**
- * Sendet eine Benachrichtigungs-Mail (Placeholder — eigenen Mail-Service einbinden).
- */
-async function sendEmail(to, subject, body) {
+// ---------------------------------------------------------------------------
+// Helper: structured logger
+// ---------------------------------------------------------------------------
+function logInfo(event, data = {}) {
+  console.log(JSON.stringify({ level: 'info', event, ...data, ts: new Date().toISOString() }));
+}
+
+function logError(event, err, data = {}) {
+  console.error(JSON.stringify({
+    level: 'error',
+    event,
+    message: err?.message ?? String(err),
+    stack: err?.stack ?? null,
+    ...data,
+    ts: new Date().toISOString(),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Helper: compute plan_expires_at from a Stripe subscription object
+// Stripe current_period_end is a Unix timestamp (seconds).
+// ---------------------------------------------------------------------------
+function planExpiresAt(subscription) {
+  if (!subscription?.current_period_end) return null;
+  return new Date(subscription.current_period_end * 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Helper: resolve tenant_id from stripe_customer_id
+// ---------------------------------------------------------------------------
+async function tenantIdByCustomer(client, stripeCustomerId) {
+  const { rows } = await client.query(
+    'SELECT id FROM tenants WHERE stripe_customer_id = $1 LIMIT 1',
+    [stripeCustomerId]
+  );
+  return rows[0]?.id ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Event handlers — all run in background after 200 is returned to Stripe
+// ---------------------------------------------------------------------------
+
+async function handleSubscriptionCreated(subscription) {
+  const client = await pool.connect();
   try {
-    // Eigene Mail-Integration (z.B. Resend, SendGrid, SES) hier einfügen
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`[Email] An: ${to} | Betreff: ${subject}`);
+    await client.query('BEGIN');
+
+    const customerId = subscription.customer;
+    const priceId    = subscription.items?.data?.[0]?.price?.id ?? null;
+    const plan       = priceIdToPlan(priceId) ?? 'starter';
+    const expiresAt  = planExpiresAt(subscription);
+
+    // Upsert by stripe_customer_id
+    await client.query(
+      `UPDATE tenants
+          SET plan            = $2,
+              plan_expires_at = $3,
+              stripe_subscription_id = $4,
+              updated_at      = NOW()
+        WHERE stripe_customer_id = $1`,
+      [customerId, plan, expiresAt, subscription.id]
+    );
+
+    await client.query('COMMIT');
+    logInfo('subscription.created.processed', { customerId, plan, subscriptionId: subscription.id });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logError('subscription.created.failed', err, { subscriptionId: subscription.id });
+  } finally {
+    client.release();
+  }
+}
+
+async function handleSubscriptionUpdated(subscription) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const customerId = subscription.customer;
+    const priceId    = subscription.items?.data?.[0]?.price?.id ?? null;
+    const plan       = priceIdToPlan(priceId);
+    const expiresAt  = planExpiresAt(subscription);
+
+    if (!plan) {
+      logInfo('subscription.updated.unknown_price', { customerId, priceId });
+    }
+
+    await client.query(
+      `UPDATE tenants
+          SET plan            = COALESCE($2, plan),
+              plan_expires_at = $3,
+              stripe_subscription_id = $4,
+              updated_at      = NOW()
+        WHERE stripe_customer_id = $1`,
+      [customerId, plan, expiresAt, subscription.id]
+    );
+
+    await client.query('COMMIT');
+    logInfo('subscription.updated.processed', { customerId, plan, subscriptionId: subscription.id });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logError('subscription.updated.failed', err, { subscriptionId: subscription.id });
+  } finally {
+    client.release();
+  }
+}
+
+async function handleSubscriptionDeleted(subscription) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const customerId = subscription.customer;
+
+    await client.query(
+      `UPDATE tenants
+          SET plan                   = 'free',
+              plan_expires_at        = NULL,
+              stripe_subscription_id = NULL,
+              updated_at             = NOW()
+        WHERE stripe_customer_id = $1`,
+      [customerId]
+    );
+
+    await client.query('COMMIT');
+    logInfo('subscription.deleted.processed', { customerId, subscriptionId: subscription.id });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logError('subscription.deleted.failed', err, { subscriptionId: subscription.id });
+  } finally {
+    client.release();
+  }
+}
+
+async function handleInvoicePaymentSucceeded(invoice) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const customerId = invoice.customer;
+    const tenantId   = await tenantIdByCustomer(client, customerId);
+
+    await client.query(
+      `UPDATE tenants
+          SET payment_status = 'active',
+              updated_at     = NOW()
+        WHERE stripe_customer_id = $1`,
+      [customerId]
+    );
+
+    // Audit log
+    if (tenantId) {
+      await client.query(
+        `INSERT INTO audit_logs (tenant_id, action, actor, metadata, created_at)
+         VALUES ($1, 'invoice.payment_succeeded', 'stripe', $2, NOW())`,
+        [
+          tenantId,
+          JSON.stringify({
+            invoice_id:  invoice.id,
+            amount_paid: invoice.amount_paid,
+            currency:    invoice.currency,
+            hosted_invoice_url: invoice.hosted_invoice_url ?? null,
+          }),
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+    logInfo('invoice.payment_succeeded.processed', { customerId, invoiceId: invoice.id });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logError('invoice.payment_succeeded.failed', err, { invoiceId: invoice.id });
+  } finally {
+    client.release();
+  }
+}
+
+async function handleInvoicePaymentFailed(invoice) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const customerId = invoice.customer;
+
+    await client.query(
+      `UPDATE tenants
+          SET payment_status = 'past_due',
+              updated_at     = NOW()
+        WHERE stripe_customer_id = $1`,
+      [customerId]
+    );
+
+    await client.query('COMMIT');
+    logInfo('invoice.payment_failed.processed', { customerId, invoiceId: invoice.id });
+
+    // Notification — fire-and-forget; send via your notification service
+    // e.g. notificationService.sendPaymentFailedAlert(customerId, invoice);
+    // Kept as a no-op stub to avoid import coupling at this layer.
+    logInfo('invoice.payment_failed.notification_stub', {
+      note:       'Wire up notification service here',
+      customerId,
+      invoiceId:  invoice.id,
+      attemptCount: invoice.attempt_count ?? null,
+      nextAttempt:  invoice.next_payment_attempt ?? null,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logError('invoice.payment_failed.failed', err, { invoiceId: invoice.id });
+  } finally {
+    client.release();
+  }
+}
+
+async function handleCheckoutSessionCompleted(session) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const stripeCustomerId     = session.customer;
+    const stripeSubscriptionId = session.subscription;
+    // client_reference_id is set during checkout creation to link the tenant
+    const tenantId             = session.client_reference_id ?? null;
+
+    if (!tenantId) {
+      logInfo('checkout.session.completed.no_tenant_ref', { sessionId: session.id });
+      await client.query('COMMIT');
       return;
     }
-    // Beispiel: await resend.emails.send({ from: 'noreply@realsyncdynamics.com', to, subject, html: body });
-  } catch (err) {
-    console.error('[Webhook] E-Mail Fehler:', err.message);
-  }
-}
 
-/**
- * Tenant anhand der Stripe Customer ID laden.
- */
-async function getTenantByCustomerId(customerId) {
-  const result = await db.query(
-    'SELECT id, name, plan, settings FROM tenants WHERE stripe_customer_id = $1',
-    [customerId]
-  );
-  return result.rows[0] || null;
-}
-
-/**
- * Admin-E-Mail-Adresse(n) aus der DB oder ENV laden.
- */
-async function getAdminEmails() {
-  const envAdmins = process.env.ADMIN_NOTIFICATION_EMAILS;
-  if (envAdmins) return envAdmins.split(',').map((e) => e.trim());
-  try {
-    const result = await db.query(
-      "SELECT email FROM users WHERE role = 'admin' AND is_active = true LIMIT 10"
-    );
-    return result.rows.map((r) => r.email);
-  } catch {
-    return [];
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Event-Handler
-// ---------------------------------------------------------------------------
-
-/**
- * customer.subscription.created
- * Wird aufgerufen wenn eine neue Subscription angelegt wurde.
- * Tenant-Plan aktualisieren, Welcome-Mail senden.
- */
-async function handleSubscriptionCreated(event) {
-  const subscription = event.data.object;
-  const tenant = await getTenantByCustomerId(subscription.customer);
-
-  if (!tenant) {
-    console.warn('[Webhook] subscription.created: Kein Tenant für Customer', subscription.customer);
-    return;
-  }
-
-  const priceId = subscription.items?.data?.[0]?.price?.id;
-  const newPlan = getPlanByStripePriceId(priceId) || 'starter';
-  const planConfig = PLANS[newPlan];
-
-  // Tenant-Plan in DB aktualisieren
-  await db.query(
-    `UPDATE tenants
-     SET plan = $1,
-         subscription_id = $2,
-         subscription_status = $3,
-         updated_at = NOW()
-     WHERE id = $4`,
-    [newPlan, subscription.id, subscription.status, tenant.id]
-  );
-
-  // Feature-Flags aus Plan-Limits setzen
-  await db.query(
-    `UPDATE tenants
-     SET settings = settings || $1::jsonb
-     WHERE id = $2`,
-    [
-      JSON.stringify({
-        max_workflows: planConfig.limits.max_workflows,
-        max_gateways: planConfig.limits.max_gateways,
-        max_agent_runs_per_month: planConfig.limits.max_agent_runs_per_month,
-        compliance_reports: planConfig.limits.compliance_reports,
-        human_approval: planConfig.limits.human_approval,
-        allowed_agent_types: planConfig.limits.allowed_agent_types,
-      }),
-      tenant.id,
-    ]
-  );
-
-  // Welcome-Mail senden
-  const users = await db.query(
-    "SELECT email, display_name FROM users WHERE tenant_id = $1 AND role = 'owner' LIMIT 1",
-    [tenant.id]
-  );
-  if (users.rows.length > 0) {
-    const owner = users.rows[0];
-    await sendEmail(
-      owner.email,
-      `Willkommen beim RealSyncDynamics ${planConfig.name}-Plan!`,
-      `<h1>Danke, ${owner.display_name}!</h1>
-       <p>Deine Subscription für den <strong>${planConfig.name}-Plan</strong> ist aktiv.</p>
-       <p>Du kannst jetzt bis zu ${planConfig.limits.max_workflows === -1 ? 'unbegrenzt viele' : planConfig.limits.max_workflows} Workflows und
-       ${planConfig.limits.max_agent_runs_per_month === -1 ? 'unbegrenzt viele' : planConfig.limits.max_agent_runs_per_month} Agent-Runs pro Monat nutzen.</p>
-       <p><a href="${process.env.APP_FRONTEND_URL}/dashboard">Zum Dashboard</a></p>`
-    );
-  }
-
-  await writeAuditLog(
-    tenant.id,
-    'subscription.created',
-    { subscription_id: subscription.id, plan: newPlan, status: subscription.status },
-    event.id
-  );
-
-  console.log(`[Webhook] subscription.created: Tenant ${tenant.id} → Plan ${newPlan}`);
-}
-
-/**
- * customer.subscription.updated
- * Plan und Feature-Flags aktualisieren bei Plan-Wechsel oder Status-Änderung.
- */
-async function handleSubscriptionUpdated(event) {
-  const subscription = event.data.object;
-  const tenant = await getTenantByCustomerId(subscription.customer);
-
-  if (!tenant) {
-    console.warn('[Webhook] subscription.updated: Kein Tenant für Customer', subscription.customer);
-    return;
-  }
-
-  const priceId = subscription.items?.data?.[0]?.price?.id;
-  const newPlan = getPlanByStripePriceId(priceId) || tenant.plan;
-  const planConfig = PLANS[newPlan];
-
-  await db.query(
-    `UPDATE tenants
-     SET plan = $1,
-         subscription_id = $2,
-         subscription_status = $3,
-         updated_at = NOW()
-     WHERE id = $4`,
-    [newPlan, subscription.id, subscription.status, tenant.id]
-  );
-
-  // Feature-Flags aktualisieren
-  await db.query(
-    `UPDATE tenants
-     SET settings = settings || $1::jsonb
-     WHERE id = $2`,
-    [
-      JSON.stringify({
-        max_workflows: planConfig.limits.max_workflows,
-        max_gateways: planConfig.limits.max_gateways,
-        max_agent_runs_per_month: planConfig.limits.max_agent_runs_per_month,
-        compliance_reports: planConfig.limits.compliance_reports,
-        human_approval: planConfig.limits.human_approval,
-        allowed_agent_types: planConfig.limits.allowed_agent_types,
-      }),
-      tenant.id,
-    ]
-  );
-
-  await writeAuditLog(
-    tenant.id,
-    'subscription.updated',
-    {
-      subscription_id: subscription.id,
-      plan: newPlan,
-      status: subscription.status,
-      cancel_at_period_end: subscription.cancel_at_period_end,
-    },
-    event.id
-  );
-
-  console.log(`[Webhook] subscription.updated: Tenant ${tenant.id} → Plan ${newPlan}, Status ${subscription.status}`);
-}
-
-/**
- * customer.subscription.deleted
- * Tenant auf Free-Plan downgraden.
- */
-async function handleSubscriptionDeleted(event) {
-  const subscription = event.data.object;
-  const tenant = await getTenantByCustomerId(subscription.customer);
-
-  if (!tenant) {
-    console.warn('[Webhook] subscription.deleted: Kein Tenant für Customer', subscription.customer);
-    return;
-  }
-
-  const freePlan = PLANS.free;
-
-  await db.query(
-    `UPDATE tenants
-     SET plan = 'free',
-         subscription_id = NULL,
-         subscription_status = 'canceled',
-         settings = settings || $1::jsonb,
-         updated_at = NOW()
-     WHERE id = $2`,
-    [
-      JSON.stringify({
-        max_workflows: freePlan.limits.max_workflows,
-        max_gateways: freePlan.limits.max_gateways,
-        max_agent_runs_per_month: freePlan.limits.max_agent_runs_per_month,
-        compliance_reports: freePlan.limits.compliance_reports,
-        human_approval: freePlan.limits.human_approval,
-        allowed_agent_types: freePlan.limits.allowed_agent_types,
-      }),
-      tenant.id,
-    ]
-  );
-
-  // Benachrichtigungs-Mail an Tenant-Owner
-  const users = await db.query(
-    "SELECT email, display_name FROM users WHERE tenant_id = $1 AND role = 'owner' LIMIT 1",
-    [tenant.id]
-  );
-  if (users.rows.length > 0) {
-    const owner = users.rows[0];
-    await sendEmail(
-      owner.email,
-      'Deine RealSyncDynamics Subscription wurde beendet',
-      `<p>Hallo ${owner.display_name},</p>
-       <p>deine Subscription wurde beendet. Du hast jetzt Zugriff auf den kostenlosen Free-Plan.</p>
-       <p><a href="${process.env.APP_FRONTEND_URL}/billing/upgrade">Jetzt wieder upgraden</a></p>`
-    );
-  }
-
-  await writeAuditLog(
-    tenant.id,
-    'subscription.deleted',
-    { subscription_id: subscription.id, downgraded_to: 'free' },
-    event.id
-  );
-
-  console.log(`[Webhook] subscription.deleted: Tenant ${tenant.id} → Free`);
-}
-
-/**
- * invoice.payment_succeeded
- * Zahlungsbestätigung loggen.
- */
-async function handleInvoicePaymentSucceeded(event) {
-  const invoice = event.data.object;
-  const tenant = await getTenantByCustomerId(invoice.customer);
-
-  if (!tenant) return;
-
-  await writeAuditLog(
-    tenant.id,
-    'invoice.payment_succeeded',
-    {
-      invoice_id: invoice.id,
-      amount_paid: invoice.amount_paid / 100,
-      currency: invoice.currency,
-      invoice_url: invoice.hosted_invoice_url,
-    },
-    event.id
-  );
-
-  // Optional: Subscription-Status sicherstellen
-  if (invoice.subscription) {
-    await db.query(
-      "UPDATE tenants SET subscription_status = 'active' WHERE id = $1",
-      [tenant.id]
-    );
-  }
-
-  console.log(`[Webhook] invoice.payment_succeeded: Tenant ${tenant.id}, Betrag ${invoice.amount_paid / 100} ${invoice.currency}`);
-}
-
-/**
- * invoice.payment_failed
- * Admin benachrichtigen, Tenant-Status auf 'past_due' setzen.
- */
-async function handleInvoicePaymentFailed(event) {
-  const invoice = event.data.object;
-  const tenant = await getTenantByCustomerId(invoice.customer);
-
-  if (!tenant) return;
-
-  // Tenant-Status aktualisieren
-  await db.query(
-    "UPDATE tenants SET subscription_status = 'past_due', updated_at = NOW() WHERE id = $1",
-    [tenant.id]
-  );
-
-  const adminEmails = await getAdminEmails();
-  for (const adminEmail of adminEmails) {
-    await sendEmail(
-      adminEmail,
-      `[ALERT] Zahlungsfehler: Tenant ${tenant.name}`,
-      `<p>Zahlung fehlgeschlagen für Tenant <strong>${tenant.name}</strong> (ID: ${tenant.id}).</p>
-       <p>Invoice: ${invoice.id} | Betrag: ${invoice.amount_due / 100} ${invoice.currency}</p>
-       <p>Stripe Invoice: <a href="${invoice.hosted_invoice_url}">${invoice.hosted_invoice_url}</a></p>
-       <p>Stripe wird automatisch erneut versuchen, die Zahlung einzuziehen.</p>`
-    );
-  }
-
-  // Benachrichtigung an Tenant-Owner
-  const users = await db.query(
-    "SELECT email, display_name FROM users WHERE tenant_id = $1 AND role = 'owner' LIMIT 1",
-    [tenant.id]
-  );
-  if (users.rows.length > 0) {
-    const owner = users.rows[0];
-    await sendEmail(
-      owner.email,
-      'Zahlungsproblem mit deiner RealSyncDynamics Subscription',
-      `<p>Hallo ${owner.display_name},</p>
-       <p>leider konnte deine Zahlung nicht verarbeitet werden.</p>
-       <p>Bitte aktualisiere deine Zahlungsmethode: <a href="${invoice.hosted_invoice_url}">Rechnung anzeigen</a></p>`
-    );
-  }
-
-  await writeAuditLog(
-    tenant.id,
-    'invoice.payment_failed',
-    {
-      invoice_id: invoice.id,
-      amount_due: invoice.amount_due / 100,
-      currency: invoice.currency,
-      attempt_count: invoice.attempt_count,
-    },
-    event.id
-  );
-
-  console.log(`[Webhook] invoice.payment_failed: Tenant ${tenant.id}, Invoice ${invoice.id}`);
-}
-
-/**
- * checkout.session.completed
- * Tenant mit Stripe Customer verknüpfen (falls noch nicht geschehen).
- */
-async function handleCheckoutSessionCompleted(event) {
-  const session = event.data.object;
-  const tenantId = session.metadata?.tenant_id;
-
-  if (!tenantId) {
-    console.warn('[Webhook] checkout.session.completed: Keine tenant_id in metadata');
-    return;
-  }
-
-  // Stripe Customer ID zum Tenant speichern
-  if (session.customer) {
-    await db.query(
+    // Link stripe customer_id to tenant
+    await client.query(
       `UPDATE tenants
-       SET stripe_customer_id = $1, updated_at = NOW()
-       WHERE id = $2 AND (stripe_customer_id IS NULL OR stripe_customer_id = '')`,
-      [session.customer, tenantId]
+          SET stripe_customer_id     = $2,
+              stripe_subscription_id = $3,
+              updated_at             = NOW()
+        WHERE id = $1`,
+      [tenantId, stripeCustomerId, stripeSubscriptionId]
     );
-  }
 
-  await writeAuditLog(
-    tenantId,
-    'checkout.session.completed',
-    {
-      session_id: session.id,
-      customer_id: session.customer,
-      plan: session.metadata?.plan,
-      amount_total: session.amount_total ? session.amount_total / 100 : 0,
-    },
-    event.id
-  );
+    // Activate subscription if present
+    if (stripeSubscriptionId) {
+      // Fetch subscription to get plan details
+      let plan       = null;
+      let expiresAt  = null;
 
-  console.log(`[Webhook] checkout.session.completed: Tenant ${tenantId} → Customer ${session.customer}`);
-}
-
-// ---------------------------------------------------------------------------
-// Hauptroute: POST / (Stripe sendet Events hierhin)
-// ---------------------------------------------------------------------------
-router.post(
-  '/',
-  express.raw({ type: 'application/json' }), // raw body für Signatur-Verifikation
-  async (req, res) => {
-    const signature = req.headers['stripe-signature'];
-
-    if (!signature) {
-      return res.status(400).json({ error: 'Fehlende Stripe-Signatur' });
-    }
-
-    let event;
-
-    // Stripe-Signatur verifizieren
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        signature,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-    } catch (err) {
-      console.error('[Webhook] Signatur-Verifikation fehlgeschlagen:', err.message);
-      return res.status(400).json({ error: `Webhook-Signatur ungültig: ${err.message}` });
-    }
-
-    // Idempotenz: Event bereits verarbeitet?
-    if (processedEvents.has(event.id)) {
-      console.log(`[Webhook] Duplikat ignoriert: ${event.id}`);
-      return res.status(200).json({ received: true, duplicate: true });
-    }
-
-    // Event als verarbeitet markieren (vor der Verarbeitung um Race Conditions zu minimieren)
-    processedEvents.add(event.id);
-
-    // Set-Größe begrenzen (Memory Management)
-    if (processedEvents.size > 10000) {
-      const firstEntry = processedEvents.values().next().value;
-      processedEvents.delete(firstEntry);
-    }
-
-    // Event verarbeiten
-    try {
-      switch (event.type) {
-        case 'customer.subscription.created':
-          await handleSubscriptionCreated(event);
-          break;
-
-        case 'customer.subscription.updated':
-          await handleSubscriptionUpdated(event);
-          break;
-
-        case 'customer.subscription.deleted':
-          await handleSubscriptionDeleted(event);
-          break;
-
-        case 'invoice.payment_succeeded':
-          await handleInvoicePaymentSucceeded(event);
-          break;
-
-        case 'invoice.payment_failed':
-          await handleInvoicePaymentFailed(event);
-          break;
-
-        case 'checkout.session.completed':
-          await handleCheckoutSessionCompleted(event);
-          break;
-
-        default:
-          console.log(`[Webhook] Unbehandelter Event-Typ: ${event.type}`);
+      try {
+        const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+        const priceId = sub.items?.data?.[0]?.price?.id ?? null;
+        plan      = priceIdToPlan(priceId);
+        expiresAt = planExpiresAt(sub);
+      } catch (subErr) {
+        logError('checkout.session.completed.sub_retrieve_failed', subErr, { stripeSubscriptionId });
       }
 
-      // Stripe erwartet 200 innerhalb von 30s
-      return res.status(200).json({ received: true, event_type: event.type });
-    } catch (err) {
-      console.error(`[Webhook] Fehler bei ${event.type}:`, err);
-
-      // Event aus processed Set entfernen damit Stripe retry funktioniert
-      processedEvents.delete(event.id);
-
-      return res.status(500).json({ error: 'Webhook-Verarbeitung fehlgeschlagen' });
+      await client.query(
+        `UPDATE tenants
+            SET plan            = COALESCE($2, plan),
+                plan_expires_at = $3,
+                payment_status  = 'active',
+                updated_at      = NOW()
+          WHERE id = $1`,
+        [tenantId, plan, expiresAt]
+      );
     }
+
+    await client.query('COMMIT');
+    logInfo('checkout.session.completed.processed', { tenantId, stripeCustomerId, stripeSubscriptionId });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logError('checkout.session.completed.failed', err, { sessionId: session.id });
+  } finally {
+    client.release();
   }
-);
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch table
+// ---------------------------------------------------------------------------
+const EVENT_HANDLERS = {
+  'customer.subscription.created':  (e) => handleSubscriptionCreated(e.data.object),
+  'customer.subscription.updated':  (e) => handleSubscriptionUpdated(e.data.object),
+  'customer.subscription.deleted':  (e) => handleSubscriptionDeleted(e.data.object),
+  'invoice.payment_succeeded':      (e) => handleInvoicePaymentSucceeded(e.data.object),
+  'invoice.payment_failed':         (e) => handleInvoicePaymentFailed(e.data.object),
+  'checkout.session.completed':     (e) => handleCheckoutSessionCompleted(e.data.object),
+};
+
+// ---------------------------------------------------------------------------
+// POST /stripe/webhook
+// ---------------------------------------------------------------------------
+router.post('/webhook', (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  // Verify signature synchronously — fail fast if invalid
+  let stripeEvent;
+  try {
+    stripeEvent = stripe.webhooks.constructEvent(
+      req.body, // Buffer, raw body applied by app.js
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    logError('stripe.webhook.signature_invalid', err);
+    return res.status(400).json({
+      type:     'https://realsync.io/problems/webhook-signature-invalid',
+      title:    'Webhook signature verification failed',
+      status:   400,
+      detail:   err.message,
+      instance: req.originalUrl,
+    });
+  }
+
+  // Acknowledge immediately — Stripe requires a fast 200
+  res.sendStatus(200);
+
+  // Process asynchronously so we never time out Stripe
+  const handler = EVENT_HANDLERS[stripeEvent.type];
+  if (handler) {
+    handler(stripeEvent).catch((err) =>
+      logError('stripe.webhook.handler_uncaught', err, { eventType: stripeEvent.type, eventId: stripeEvent.id })
+    );
+  } else {
+    logInfo('stripe.webhook.unhandled_event', { eventType: stripeEvent.type, eventId: stripeEvent.id });
+  }
+});
 
 module.exports = router;

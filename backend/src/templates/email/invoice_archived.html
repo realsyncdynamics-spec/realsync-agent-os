@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rechnung archiviert – RealSync Agent-OS</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F5F5F5;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;">
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#F5F5F5;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+
+        <!-- Card -->
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0"
+               style="max-width:600px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td align="center" style="background-color:#01696F;padding:28px 40px 24px;">
+              <span style="display:inline-block;font-size:24px;font-weight:700;letter-spacing:0.04em;color:#ffffff;font-family:Arial,Helvetica,sans-serif;">
+                RealSync Agent-OS
+              </span>
+              <br />
+              <span style="display:inline-block;font-size:11px;font-weight:400;color:#b2e0e2;letter-spacing:0.12em;text-transform:uppercase;margin-top:5px;font-family:Arial,Helvetica,sans-serif;">
+                Rechnungsarchivierung
+              </span>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#0C4E54;height:4px;font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+
+          <!-- Status badge row -->
+          <tr>
+            <td style="padding:28px 40px 0;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="background-color:#E6F4F4;border-left:4px solid #01696F;border-radius:0 4px 4px 0;padding:10px 16px;">
+                    <span style="font-size:13px;font-weight:700;color:#01696F;font-family:Arial,Helvetica,sans-serif;text-transform:uppercase;letter-spacing:0.08em;">
+                      &#x2714;&nbsp; Rechnung erfolgreich archiviert
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:24px 40px 32px;">
+
+              <p style="margin:0 0 24px;font-size:15px;color:#444444;line-height:1.6;font-family:Arial,Helvetica,sans-serif;">
+                Die folgende Rechnung wurde automatisch verarbeitet und im System archiviert.
+              </p>
+
+              <!-- Invoice detail table -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+                     style="border:1px solid #E0E0E0;border-radius:6px;overflow:hidden;">
+                <tr style="background-color:#F9F9F9;">
+                  <td width="50%" style="padding:12px 16px;font-size:12px;font-weight:700;color:#888888;text-transform:uppercase;letter-spacing:0.08em;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #E0E0E0;">
+                    Feld
+                  </td>
+                  <td width="50%" style="padding:12px 16px;font-size:12px;font-weight:700;color:#888888;text-transform:uppercase;letter-spacing:0.08em;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #E0E0E0;">
+                    Wert
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:11px 16px;font-size:13px;color:#666666;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">Lieferant</td>
+                  <td style="padding:11px 16px;font-size:13px;color:#222222;font-weight:600;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">{{vendor}}</td>
+                </tr>
+                <tr style="background-color:#FAFAFA;">
+                  <td style="padding:11px 16px;font-size:13px;color:#666666;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">Betrag</td>
+                  <td style="padding:11px 16px;font-size:13px;color:#0C4E54;font-weight:700;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">{{amount}} {{currency}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:11px 16px;font-size:13px;color:#666666;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">Rechnungsnummer</td>
+                  <td style="padding:11px 16px;font-size:13px;color:#222222;font-weight:600;font-family:Arial,Helvetica,sans-serif;border-bottom:1px solid #F0F0F0;">{{invoice_number}}</td>
+                </tr>
+                <tr style="background-color:#FAFAFA;">
+                  <td style="padding:11px 16px;font-size:13px;color:#666666;font-family:Arial,Helvetica,sans-serif;">Genehmigt von</td>
+                  <td style="padding:11px 16px;font-size:13px;color:#222222;font-weight:600;font-family:Arial,Helvetica,sans-serif;">{{approved_by}}</td>
+                </tr>
+              </table>
+
+              <!-- AI note -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:20px;">
+                <tr>
+                  <td style="background-color:#F0F8F8;border:1px solid #C8E6E7;border-radius:6px;padding:14px 16px;">
+                    <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#01696F;text-transform:uppercase;letter-spacing:0.10em;font-family:Arial,Helvetica,sans-serif;">
+                      KI-Klassifizierung (EU AI Act Art. 13)
+                    </p>
+                    <p style="margin:0;font-size:13px;color:#444444;line-height:1.55;font-family:Arial,Helvetica,sans-serif;">
+                      {{ai_note}}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Spacer -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr><td style="padding:24px 0 0;font-size:0;">&nbsp;</td></tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td align="center" style="border-radius:6px;background-color:#01696F;">
+                    <a href="{{archive_url}}"
+                       style="display:inline-block;padding:13px 32px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:6px;font-family:Arial,Helvetica,sans-serif;">
+                      Archiveintrag öffnen &rarr;
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:16px 0 0;font-size:12px;color:#999999;line-height:1.5;font-family:Arial,Helvetica,sans-serif;">
+                Direktlink: <a href="{{archive_url}}" style="color:#01696F;word-break:break-all;">{{archive_url}}</a>
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color:#F5F5F5;border-top:1px solid #E0E0E0;padding:20px 40px;">
+              <p style="margin:0;font-size:11px;color:#999999;text-align:center;line-height:1.6;font-family:Arial,Helvetica,sans-serif;">
+                RealSync Agent-OS &nbsp;|&nbsp; EU AI Act konform &nbsp;|&nbsp;
+                <a href="#" style="color:#01696F;text-decoration:none;">Datenschutz</a>
+                &nbsp;|&nbsp;
+                <a href="#" style="color:#01696F;text-decoration:none;">Abbestellen</a>
+              </p>
+              <p style="margin:8px 0 0;font-size:11px;color:#bbbbbb;text-align:center;font-family:Arial,Helvetica,sans-serif;">
+                &copy; RealSyncDynamics GmbH &middot; Alle Rechte vorbehalten
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

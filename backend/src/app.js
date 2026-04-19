@@ -118,6 +118,7 @@ app.use('/api/compliance', require('./routes/compliance'));
 app.use('/api/billing',    require('./routes/billing'));
 app.use('/api/approvals',  require('./routes/approvals'));
 app.use('/api/audit',      require('./routes/audit'));
+app.use('/api/invoices',   require('./routes/invoices'));
 
 // ---------------------------------------------------------------------------
 // Agent routes (X-Agent-Key)
