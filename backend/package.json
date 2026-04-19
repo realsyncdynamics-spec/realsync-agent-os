@@ -1,4 +1,5 @@
 {
+  "name": "realsync-agent-os-backend",
   "version": "1.3.0",
   "description": "RealSyncDynamics Agent-OS — Backend API Service",
   "main": "src/app.js",

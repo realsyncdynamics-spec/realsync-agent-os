@@ -12,8 +12,8 @@ RUN apk add --no-cache bash curl
 # Copy dependency manifests first for layer caching
 COPY package*.json ./
 
-# Install production dependencies only
-RUN npm install --production && npm cache clean --force
+# Install production dependencies only (reproducible builds)
+RUN npm ci --only=production && npm cache clean --force
 # Copy application source
 COPY src/ ./src/
 
