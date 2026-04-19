@@ -1,0 +1,182 @@
+version: "3.9"
+
+# ============================================================
+# RealSync Agent-OS — Local Development Stack
+# Postgres 16 + Redis 7 + Backend + Gateway
+# Usage: docker compose up -d
+# ============================================================
+
+networks:
+  realsync_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+services:
+  # ── PostgreSQL 16 ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: realsync_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: realsync
+      POSTGRES_PASSWORD: realsync_local_secret
+      POSTGRES_DB: realsync_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U realsync -d realsync_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - realsync_net
+
+  # ── Redis 7 ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: realsync_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - realsync_net
+
+  # ── Backend (Node.js/Express) ────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    container_name: realsync_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 8080
+      DATABASE_URL: postgresql://realsync:realsync_local_secret@postgres:5432/realsync_dev
+      REDIS_URL: redis://redis:6379
+      # ── Auth ───────────────────────────────────────────
+      JWT_SECRET: ${JWT_SECRET:-local_dev_jwt_secret_change_in_production}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-local_dev_refresh_secret_change_in_production}
+      JWT_EXPIRY: ${JWT_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
+      # ── Internal ───────────────────────────────────────
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-local_dev_agent_key}
+      GATEWAY_SECRET: ${GATEWAY_SECRET:-local_dev_gateway_secret}
+      INTERNAL_HEALTH_KEY: ${INTERNAL_HEALTH_KEY:-local_dev_health_key}
+      # ── AI ─────────────────────────────────────────────
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      AI_MAX_TOKENS: ${AI_MAX_TOKENS:-2048}
+      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.3}
+      # ── Stripe ─────────────────────────────────────────
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # ── Email ──────────────────────────────────────────
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@realsync.local}
+      # ── Workers ────────────────────────────────────────
+      ENABLE_WORKERS: ${ENABLE_WORKERS:-true}
+      # ── OpenClaw ───────────────────────────────────────
+      OPENCLAW_URL: ${OPENCLAW_URL:-http://gateway:8443}
+      # ── Misc ───────────────────────────────────────────
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      COMPANY_NAME: RealSync Dynamics
+      SUPPORT_EMAIL: support@realsyncdynamics.com
+      APP_URL: http://localhost:8080
+    ports:
+      - "8080:8080"
+    volumes:
+      # Hot-reload for development: mount source, keep node_modules from image
+      - ./backend/src:/app/src:ro
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - realsync_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── OpenClaw Gateway ────────────────────────────────────
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: realsync_gateway
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 8443
+      BACKEND_URL: http://backend:8080
+      GATEWAY_SECRET: ${GATEWAY_SECRET:-local_dev_gateway_secret}
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-local_dev_agent_key}
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+    ports:
+      - "8443:8443"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8443/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - realsync_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Mailpit (local SMTP catcher — no real emails sent) ──
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: realsync_mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI → http://localhost:8025
+    networks:
+      - realsync_net
+    profiles:
+      - dev          # only starts with: docker compose --profile dev up
