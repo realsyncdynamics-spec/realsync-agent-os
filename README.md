@@ -31,27 +31,30 @@ Automatisiert wiederkehrende Geschäftsprozesse mit nachvollziehbaren KI-Entsche
 git clone https://github.com/realsyncdynamics-spec/realsync-agent-os.git
 cd realsync-agent-os
 
-# 2. Environment konfigurieren
-cp .env.example .env
-# → .env öffnen und Werte eintragen (mindestens DATABASE_URL, JWT_SECRET, OPENAI_API_KEY)
+# 2. Pre-Flight prüfen (Voraussetzungen + Repo-Vollständigkeit)
+bash scripts/preflight_check.sh --quick
 
-# 3. PostgreSQL + Redis starten (oder lokal installiert nutzen)
-docker run -d --name pg -e POSTGRES_PASSWORD=password -e POSTGRES_DB=realsync_agentdb -p 5432:5432 postgres:16-alpine
-docker run -d --name redis -p 6379:6379 redis:7-alpine
+# 3. Stack starten — Postgres 16 + Redis 7 + Backend + Gateway
+#    Beim ersten Start: schema.sql wird automatisch eingespielt
+docker compose up -d
 
-# 4. Datenbankschema einrichten
-psql $DATABASE_URL -f backend/src/db/schema.sql
-psql $DATABASE_URL -f backend/src/db/migrations/001_add_auth_tables.sql
-psql $DATABASE_URL -f backend/src/db/migrations/002_add_approvals_table.sql
-psql $DATABASE_URL -f backend/src/db/migrations/003_invoices_health_metrics.sql
+# Optional: Mailpit (SMTP-Catcher → http://localhost:8025)
+docker compose --profile dev up -d
 
-# 5. Backend starten
-cd backend
-npm install
-npm run dev
-
-# 6. Health Check
+# 4. Health Check
 curl http://localhost:8080/health
+
+# 5. Stack stoppen
+docker compose down
+```
+
+**Manuelle Einzel-Services** (ohne Docker Compose):
+
+```bash
+# Nur DB + Redis via Docker, Backend lokal
+docker compose up -d postgres redis
+cp .env.example .env  # DATABASE_URL + JWT_SECRET + OPENAI_API_KEY eintragen
+cd backend && npm install && npm run dev
 ```
 
 ---

@@ -19,45 +19,70 @@ const AGENT_VERSION       = '1.0.0';
 const MAX_ACTION_RETRIES  = 3;
 const RETRY_DELAY_BASE_MS = 1_000;
 
-// ─── Simulated DB / credential store ─────────────────────────────────────────
-// In production, replace with real DB queries (Prisma / pg / Knex / etc.)
+// ─── Database pool ───────────────────────────────────────────────────────────
+const pool = require('../db');
 
-/** @type {Map<string, {url: string, apiKey: string, label: string}>} */
-const GATEWAY_CREDENTIALS_DB = new Map([
-  ['gw-prod-01', {
-    url:    process.env.GW_PROD_01_URL     || 'http://prod-host-01:8080',
-    apiKey: process.env.GW_PROD_01_APIKEY  || 'prod-secret-01',
-    label:  'Production Server 01',
-  }],
-  ['gw-prod-02', {
-    url:    process.env.GW_PROD_02_URL     || 'http://prod-host-02:8080',
-    apiKey: process.env.GW_PROD_02_APIKEY  || 'prod-secret-02',
-    label:  'Production Server 02',
-  }],
-  ['gw-staging', {
-    url:    process.env.GW_STAGING_URL     || 'http://staging-host:8080',
-    apiKey: process.env.GW_STAGING_APIKEY  || 'staging-secret',
-    label:  'Staging Environment',
-  }],
-]);
+// ─── AgentRun DB helpers ─────────────────────────────────────────────────────
 
-// ─── Simulated AgentRun DB ────────────────────────────────────────────────────
-
-function writeAgentRunLog(entry) {
-  // In production: INSERT INTO agent_runs (...) VALUES (...)
-  console.log('[AgentRun]', JSON.stringify({
-    ...entry,
-    logged_at: new Date().toISOString(),
-  }));
+/**
+ * Persists a new agent_run row.
+ * Table agent_runs is expected from schema.sql (sprint 1+).
+ */
+async function writeAgentRunLog(entry) {
+  try {
+    await pool.query(
+      `INSERT INTO agent_runs
+         (id, task_id, workflow_id, tenant_id, action, gateway_id,
+          params, status, started_at, agent_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        entry.agent_run_id,
+        entry.task_id,
+        entry.workflow_id,
+        entry.tenant_id,
+        entry.action,
+        entry.gateway_id,
+        JSON.stringify(entry.params || {}),
+        entry.status,
+        entry.started_at,
+        entry.agent_version,
+      ]
+    );
+  } catch (err) {
+    // Non-fatal: log to stdout as fallback
+    console.error('[AgentRun:write] DB insert failed, falling back to stdout:', err.message);
+    console.log('[AgentRun]', JSON.stringify({ ...entry, logged_at: new Date().toISOString() }));
+  }
 }
 
-function updateAgentRunLog(agentRunId, update) {
-  // In production: UPDATE agent_runs SET ... WHERE id = agentRunId
-  console.log('[AgentRun:Update]', JSON.stringify({
-    agent_run_id: agentRunId,
-    ...update,
-    updated_at: new Date().toISOString(),
-  }));
+/**
+ * Updates status/output/error on an existing agent_run row.
+ */
+async function updateAgentRunLog(agentRunId, update) {
+  try {
+    await pool.query(
+      `UPDATE agent_runs
+         SET status      = COALESCE($2, status),
+             output      = COALESCE($3, output),
+             error       = COALESCE($4, error),
+             attempts    = COALESCE($5, attempts),
+             finished_at = COALESCE($6, finished_at),
+             updated_at  = NOW()
+       WHERE id = $1`,
+      [
+        agentRunId,
+        update.status      || null,
+        update.output      ? JSON.stringify(update.output) : null,
+        update.error       || null,
+        update.attempts    || null,
+        update.finished_at || null,
+      ]
+    );
+  } catch (err) {
+    console.error('[AgentRun:update] DB update failed, falling back to stdout:', err.message);
+    console.log('[AgentRun:Update]', JSON.stringify({ agent_run_id: agentRunId, ...update }));
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -85,16 +110,25 @@ function validateBody(body) {
 /**
  * Fetch gateway credentials from DB.
  *
+ * Fetch gateway credentials from the DB.
+ * Enforces tenant isolation: a gateway only resolves if it belongs to the requesting tenant.
+ *
  * @param {string} gatewayId
  * @param {string} tenantId
- * @returns {{ url: string, apiKey: string, label: string } | null}
+ * @returns {Promise<{ url: string, apiKey: string, label: string } | null>}
  */
 async function getGatewayCredentials(gatewayId, tenantId) {
-  // In production: SELECT url, api_key FROM gateways
-  //                WHERE id = $1 AND tenant_id = $2 AND active = true
-  const creds = GATEWAY_CREDENTIALS_DB.get(gatewayId);
-  if (!creds) return null;
-  return creds;
+  const result = await pool.query(
+    `SELECT url, api_key, name AS label
+       FROM gateways
+      WHERE id = $1
+        AND tenant_id = $2
+        AND status = 'active'`,
+    [gatewayId, tenantId]
+  );
+  if (!result.rows.length) return null;
+  const { url, api_key, label } = result.rows[0];
+  return { url, apiKey: api_key, label };
 }
 
 /**
