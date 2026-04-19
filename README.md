@@ -247,3 +247,5 @@ ENABLE_WORKERS=true npm start
 ## Lizenz
 
 MIT — © 2026 RealSyncDynamics
+
+
