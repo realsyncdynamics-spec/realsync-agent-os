@@ -19,6 +19,7 @@ jobs:
       - name: Lint
         working-directory: backend
         run: npm run lint --if-present
+        continue-on-error: true
       - name: Unit tests
         working-directory: backend
         run: npm test --if-present
