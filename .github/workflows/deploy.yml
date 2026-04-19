@@ -57,8 +57,7 @@ jobs:
         working-directory: backend
       - run: npm test --if-present
         working-directory: backend
-
-# ──────────────────────────────────────────────────────────────
+─────────────────────────────────────────────────────────────
 # 2. Build Backend Image
 # ──────────────────────────────────────────────────────────────
   build-backend:
