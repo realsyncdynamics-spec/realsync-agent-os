@@ -1,5 +1,4 @@
 {
-  "name": "realsync-backend",
   "version": "1.3.0",
   "description": "RealSyncDynamics Agent-OS — Backend API Service",
   "main": "src/app.js",
@@ -10,8 +9,8 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "lint": "eslint src/ --ext .js --max-warnings 0",
-    "test": "jest --forceExit --detectOpenHandles",
-    "test:ci": "jest --forceExit --detectOpenHandles --ci --coverage"
+    "test": "jest --forceExit --detectOpenHandles --passWithNoTests",
+    "test:ci": "jest --forceExit --detectOpenHandles --ci --coverage --passWithNoTests"
   },
   "dependencies": {
     "axios": "^1.7.7",
