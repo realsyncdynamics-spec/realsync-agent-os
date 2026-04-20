@@ -101,7 +101,6 @@ jobs:
             --allow-unauthenticated
             --memory=512Mi
             --cpu=1
-            --labels=managed-by=github-actions,eu-ai-act=compliant
 
       - name: Deploy Gateway
         uses: google-github-actions/deploy-cloudrun@v2
@@ -118,4 +117,3 @@ jobs:
             --allow-unauthenticated
             --memory=256Mi
             --cpu=1
-            --labels=managed-by=github-actions
