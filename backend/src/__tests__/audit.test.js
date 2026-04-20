@@ -24,7 +24,7 @@ jest.mock('ioredis', () => {
 
 jest.mock('../middleware/auth', () => ({
   authenticate: (req, _res, next) => {
-    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin' };
+    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin', tenant_id: 'ten_test_001' };
     req.tenant_id = 'ten_test_001';
     req.user_id   = 'usr_test_001';
     req.user_role = 'admin';
@@ -89,7 +89,7 @@ describe('GET /audit', () => {
   it('returns audit log entries', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [AUDIT_ENTRY] })
-      .mockResolvedValueOnce({ rows: [{ count: '1' }] });
+      .mockResolvedValueOnce({ rows: [{ total: '1' }] });
 
     const res = await request(app).get('/api/v1/audit');
     expect(res.status).toBe(200);
@@ -100,7 +100,7 @@ describe('GET /audit', () => {
   it('returns empty list for tenant with no audit events', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ count: '0' }] });
+      .mockResolvedValueOnce({ rows: [{ total: '0' }] });
 
     const res = await request(app).get('/api/v1/audit');
     expect(res.status).toBe(200);
@@ -110,7 +110,7 @@ describe('GET /audit', () => {
   it('filters by action', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [AUDIT_ENTRY] })
-      .mockResolvedValueOnce({ rows: [{ count: '1' }] });
+      .mockResolvedValueOnce({ rows: [{ total: '1' }] });
 
     const res = await request(app).get('/api/v1/audit?action=workflow.create');
     expect(res.status).toBe(200);
@@ -119,7 +119,7 @@ describe('GET /audit', () => {
   it('filters by user_id', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [AUDIT_ENTRY] })
-      .mockResolvedValueOnce({ rows: [{ count: '1' }] });
+      .mockResolvedValueOnce({ rows: [{ total: '1' }] });
 
     const res = await request(app).get('/api/v1/audit?user_id=usr_test_001');
     expect(res.status).toBe(200);
@@ -128,7 +128,7 @@ describe('GET /audit', () => {
   it('filters by date range (from/to)', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [AUDIT_ENTRY] })
-      .mockResolvedValueOnce({ rows: [{ count: '1' }] });
+      .mockResolvedValueOnce({ rows: [{ total: '1' }] });
 
     const from = new Date(Date.now() - 86400000).toISOString();
     const to   = new Date().toISOString();
@@ -139,12 +139,12 @@ describe('GET /audit', () => {
   it('includes pagination meta', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [AUDIT_ENTRY] })
-      .mockResolvedValueOnce({ rows: [{ count: '42' }] });
+      .mockResolvedValueOnce({ rows: [{ total: '42' }] });
 
     const res = await request(app).get('/api/v1/audit?limit=20&page=1');
     expect(res.status).toBe(200);
-    expect(res.body.meta).toBeDefined();
-    expect(typeof res.body.meta.total).toBe('number');
+    expect(res.body.pagination).toBeDefined();
+    expect(typeof res.body.pagination.total).toBe('number');
   });
 });
 

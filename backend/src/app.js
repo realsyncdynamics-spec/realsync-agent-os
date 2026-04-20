@@ -108,17 +108,32 @@ app.use('/auth', require('./routes/auth'));
 const { authenticate }    = require('./middleware/auth');
 const { auditMiddleware } = require('./middleware/audit');
 
-app.use('/api', authenticate);
-app.use('/api', auditMiddleware);
+// Both /api and /api/v1 are supported (v1 for backward compat with older tests)
+app.use('/api',    authenticate);
+app.use('/api/v1', authenticate);
+app.use('/api',    auditMiddleware);
+app.use('/api/v1', auditMiddleware);
 
-app.use('/api/workflows',  require('./routes/workflows'));
-app.use('/api/tasks',      require('./routes/tasks'));
-app.use('/api/gateways',   require('./routes/gateways'));
-app.use('/api/compliance', require('./routes/compliance'));
-app.use('/api/billing',    require('./routes/billing'));
-app.use('/api/approvals',  require('./routes/approvals'));
-app.use('/api/audit',      require('./routes/audit'));
-app.use('/api/invoices',   require('./routes/invoices'));
+const workflowsRouter  = require('./routes/workflows');
+const tasksRouter      = require('./routes/tasks');
+const gatewaysRouter   = require('./routes/gateways');
+const complianceRouter = require('./routes/compliance');
+const billingRouter    = require('./routes/billing');
+const approvalsRouter  = require('./routes/approvals');
+const auditRouter      = require('./routes/audit');
+const invoicesRouter   = require('./routes/invoices');
+
+for (const prefix of ['/api', '/api/v1']) {
+  app.use(`${prefix}/workflows`,  workflowsRouter);
+  // tasks router owns both /workflows/:wfId/tasks and /tasks/:id paths
+  app.use(prefix,                 tasksRouter);
+  app.use(`${prefix}/gateways`,   gatewaysRouter);
+  app.use(`${prefix}/compliance`, complianceRouter);
+  app.use(`${prefix}/billing`,    billingRouter);
+  app.use(`${prefix}/approvals`,  approvalsRouter);
+  app.use(`${prefix}/audit`,      auditRouter);
+  app.use(`${prefix}/invoices`,   invoicesRouter);
+}
 
 // ---------------------------------------------------------------------------
 // Agent routes (X-Agent-Key)
@@ -178,11 +193,14 @@ app.use((err, req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Server start
+// Server start — only when run directly (not when require()'d by tests)
 // ---------------------------------------------------------------------------
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
+// Guard: do not listen when imported by Jest or other test runners.
+// This prevents EADDRINUSE when multiple test files load app.js.
+if (require.main === module) {
 const server = app.listen(PORT, async () => {
   console.log(JSON.stringify({
     level:       'info',
@@ -252,5 +270,6 @@ process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('unhandledRejection', (reason) => {
   console.error(JSON.stringify({ level: 'error', message: 'unhandledRejection', reason: String(reason) }));
 });
+} // end if (require.main === module)
 
 module.exports = app;

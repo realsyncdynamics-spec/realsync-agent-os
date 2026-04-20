@@ -38,7 +38,7 @@ beforeAll(() => {
   process.env.AGENT_INTERNAL_KEY = 'test_agent_key_16c';
   process.env.GATEWAY_SECRET     = 'test_gateway_secret';
   process.env.INTERNAL_HEALTH_KEY = 'test_health_key_secret';
-  process.env.REDIS_URL          = 'redis://localhost:6379';
+  process.env.REDIS_URL          = '';  // empty = not_configured, skips real connect
   process.env.DATABASE_URL       = 'postgresql://x:x@localhost/x';
   process.env.ENABLE_WORKERS     = 'false';
 

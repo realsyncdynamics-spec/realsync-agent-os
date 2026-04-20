@@ -30,7 +30,7 @@ jest.mock('ioredis', () => {
 
 jest.mock('../middleware/auth', () => ({
   authenticate: (req, _res, next) => {
-    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin' };
+    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin', tenant_id: 'ten_test_001' };
     req.tenant_id = 'ten_test_001';
     req.user_id   = 'usr_test_001';
     req.user_role = 'admin';

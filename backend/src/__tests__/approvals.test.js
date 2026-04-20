@@ -44,7 +44,7 @@ jest.mock('ioredis', () => {
 // ── Auth mock ─────────────────────────────────────────────────────────────────
 jest.mock('../middleware/auth', () => ({
   authenticate: (req, _res, next) => {
-    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin' };
+    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin', tenant_id: 'ten_test_001' };
     req.tenant_id = 'ten_test_001';
     req.user_id   = 'usr_test_001';
     req.user_role = 'admin';
@@ -269,9 +269,9 @@ describe('POST /approvals/:id/approve', () => {
     makeClient([
       { rows: [], rowCount: 0 },                           // BEGIN
       { rows: [APPROVAL_PENDING], rowCount: 1 },           // FOR UPDATE NOWAIT
+      { rows: [updatedApproval], rowCount: 1 },            // UPDATE approvals RETURNING
       { rows: [], rowCount: 1 },                           // UPDATE tasks
       { rows: [], rowCount: 1 },                           // INSERT audit_log
-      { rows: [updatedApproval], rowCount: 1 },            // UPDATE approvals RETURNING
       { rows: [], rowCount: 0 },                           // COMMIT
     ]);
 
@@ -317,12 +317,12 @@ describe('POST /approvals/:id/approve', () => {
   it('approves critical-risk with comment (EU AI Act Art. 14)', async () => {
     const updatedApproval = { ...APPROVAL_CRITICAL, status: 'approved', decision_by: USER_ID };
     makeClient([
-      { rows: [], rowCount: 0 },
-      { rows: [APPROVAL_CRITICAL], rowCount: 1 },
-      { rows: [], rowCount: 1 },
-      { rows: [], rowCount: 1 },
-      { rows: [updatedApproval], rowCount: 1 },
-      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },                           // BEGIN
+      { rows: [APPROVAL_CRITICAL], rowCount: 1 },          // FOR UPDATE NOWAIT
+      { rows: [updatedApproval], rowCount: 1 },            // UPDATE approvals RETURNING
+      { rows: [], rowCount: 1 },                           // UPDATE tasks
+      { rows: [], rowCount: 1 },                           // INSERT audit_log
+      { rows: [], rowCount: 0 },                           // COMMIT
     ]);
 
     const res = await request(app)
@@ -424,12 +424,12 @@ describe('POST /approvals/:id/reject', () => {
   it('rejects a pending approval (EU AI Act Art. 14 — human override)', async () => {
     const rejectedApproval = { ...APPROVAL_PENDING, status: 'rejected', decision_by: USER_ID };
     makeClient([
-      { rows: [], rowCount: 0 },
-      { rows: [APPROVAL_PENDING], rowCount: 1 },
-      { rows: [], rowCount: 1 },              // UPDATE tasks
-      { rows: [], rowCount: 1 },              // INSERT audit_log
-      { rows: [rejectedApproval], rowCount: 1 },
-      { rows: [], rowCount: 0 },              // COMMIT
+      { rows: [], rowCount: 0 },                           // BEGIN
+      { rows: [APPROVAL_PENDING], rowCount: 1 },           // FOR UPDATE NOWAIT
+      { rows: [rejectedApproval], rowCount: 1 },           // UPDATE approvals RETURNING
+      { rows: [], rowCount: 1 },                           // UPDATE tasks
+      { rows: [], rowCount: 1 },                           // INSERT audit_log
+      { rows: [], rowCount: 0 },                           // COMMIT
     ]);
 
     const res = await request(app)

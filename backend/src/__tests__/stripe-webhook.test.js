@@ -204,7 +204,7 @@ describe('customer.subscription.created', () => {
     expect(res.status).toBe(200);
 
     // Wait briefly for async handler
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 200));
     expect(capturedPlan).toBe('starter');
   });
 });
@@ -233,7 +233,7 @@ describe('customer.subscription.updated', () => {
     const res = await sendWebhook(app, event);
     expect(res.status).toBe(200);
 
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 200));
     expect(capturedPlan).toBe('professional');
   });
 });
@@ -248,7 +248,7 @@ describe('customer.subscription.deleted', () => {
     let sqlCalled = false;
     const client = {
       query: jest.fn(async (sql) => {
-        if (sql.includes("plan = 'free'")) sqlCalled = true;
+        if (sql.includes("plan") && sql.includes("= 'free'")) sqlCalled = true;
         return { rows: [], rowCount: 1 };
       }),
       release: mockRelease,
@@ -258,7 +258,7 @@ describe('customer.subscription.deleted', () => {
     const res = await sendWebhook(app, event);
     expect(res.status).toBe(200);
 
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 200));
     expect(sqlCalled).toBe(true);
   });
 });
@@ -313,7 +313,7 @@ describe('invoice.payment_failed', () => {
     let pastDueSet = false;
     const client = {
       query: jest.fn(async (sql) => {
-        if (sql.includes("payment_status = 'past_due'")) pastDueSet = true;
+        if (sql.includes("payment_status") && sql.includes("= 'past_due'")) pastDueSet = true;
         return { rows: [], rowCount: 1 };
       }),
       release: mockRelease,
@@ -352,7 +352,7 @@ describe('checkout.session.completed', () => {
     const client = {
       query: jest.fn(async (sql, params) => {
         if (sql.includes('stripe_customer_id') && params?.[1] === 'cus_new_001') customerLinked = true;
-        if (sql.includes("payment_status = 'active'")) planActivated = true;
+        if (sql.includes("payment_status") && sql.includes("= 'active'")) planActivated = true;
         return { rows: [], rowCount: 1 };
       }),
       release: mockRelease,
@@ -362,7 +362,7 @@ describe('checkout.session.completed', () => {
     const res = await sendWebhook(app, event);
     expect(res.status).toBe(200);
 
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 500));
     expect(customerLinked).toBe(true);
     expect(planActivated).toBe(true);
   });

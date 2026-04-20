@@ -36,6 +36,25 @@ const mockStripe = {
 
 jest.mock('stripe', () => jest.fn(() => mockStripe));
 
+// Bypass the lazy Proxy in config/stripe.js — billing.js imports from there
+jest.mock('../config/stripe', () => mockStripe);
+
+// Mock plans so stripe_price_id is always set (env vars are undefined at module load time in tests)
+jest.mock('../config/plans', () => ({
+  PLANS: {
+    free:         { name: 'Free',         price_monthly: 0,    stripe_price_id: null,                      limits: { max_workflows: 3,   max_gateways: 1,  max_agent_runs_per_month: 100   } },
+    starter:      { name: 'Starter',      price_monthly: 29,   stripe_price_id: 'price_starter_test',      limits: { max_workflows: 25,  max_gateways: 5,  max_agent_runs_per_month: 2500  } },
+    professional: { name: 'Professional', price_monthly: 99,   stripe_price_id: 'price_professional_test', limits: { max_workflows: 100, max_gateways: 20, max_agent_runs_per_month: 15000 } },
+    enterprise:   { name: 'Enterprise',   price_monthly: null, stripe_price_id: null,                      limits: { max_workflows: -1,  max_gateways: -1, max_agent_runs_per_month: -1    } },
+  },
+  getUpgradeUrl: () => 'https://app.realsyncdynamics.com/billing/upgrade',
+  getPlanByStripePriceId: (id) => {
+    const map = { 'price_starter_test': 'starter', 'price_professional_test': 'professional' };
+    return map[id] || null;
+  },
+  isLimitExceeded: (limit, current) => limit !== -1 && current >= limit,
+}));
+
 // ── DB mock ───────────────────────────────────────────────────────────────────
 const mockQuery = jest.fn();
 jest.mock('../db', () => ({ query: mockQuery }));
@@ -54,7 +73,7 @@ jest.mock('ioredis', () => {
 // ── Auth mock — inject tenant_id into req ─────────────────────────────────────
 jest.mock('../middleware/auth', () => ({
   authenticate: (req, _res, next) => {
-    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin' };
+    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin', tenant_id: 'ten_test_001' };
     req.tenant_id = 'ten_test_001';
     req.user_id   = 'usr_test_001';
     req.user_role = 'admin';
@@ -112,7 +131,10 @@ beforeAll(() => {
   process.env.REDIS_URL           = 'redis://localhost:6379';
   process.env.DATABASE_URL        = 'postgresql://x:x@localhost/x';
   process.env.ENABLE_WORKERS      = 'false';
-  process.env.STRIPE_SECRET_KEY   = 'sk_test_placeholder';
+  process.env.STRIPE_SECRET_KEY            = 'sk_test_placeholder';
+  process.env.STRIPE_STARTER_PRICE_ID      = 'price_starter_test';
+  process.env.STRIPE_PROFESSIONAL_PRICE_ID = 'price_professional_test';
+  process.env.STRIPE_ENTERPRISE_PRICE_ID   = 'price_enterprise_test';
 
   app = require('../app');
 });

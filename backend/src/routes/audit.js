@@ -180,6 +180,11 @@ router.get('/export', async (req, res) => {
     return problemJson(res, 403, 'Forbidden', 'Audit log export requires admin role.');
   }
 
+  // Date range is required for exports
+  if (!req.query.from || !req.query.to) {
+    return problemJson(res, 400, 'Invalid Parameter', "Export requires 'from' and 'to' date range parameters.");
+  }
+
   const filterResult = buildAuditFilters(req.query, tenantId);
   if (filterResult.error) {
     return problemJson(res, 400, 'Invalid Parameter', filterResult.error);

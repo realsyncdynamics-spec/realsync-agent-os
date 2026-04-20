@@ -12,8 +12,15 @@
 const request = require('supertest');
 
 // ── Mock DB pool ──────────────────────────────────────────────────────────────
-const mockQuery = jest.fn();
-jest.mock('../db', () => ({ query: mockQuery }));
+const mockQuery   = jest.fn();
+const mockClientQuery   = jest.fn();
+const mockRelease = jest.fn();
+const mockClient  = {
+  query:   mockClientQuery,
+  release: mockRelease,
+};
+const mockConnect = jest.fn().mockResolvedValue(mockClient);
+jest.mock('../db', () => ({ query: mockQuery, connect: mockConnect }));
 
 // ── Mock ioredis ──────────────────────────────────────────────────────────────
 jest.mock('ioredis', () => {
@@ -58,6 +65,8 @@ beforeAll(() => {
 
 afterEach(() => {
   mockQuery.mockReset();
+  mockClientQuery.mockReset();
+  mockRelease.mockReset();
 });
 
 afterAll(async () => {
@@ -92,26 +101,34 @@ describe('POST /auth/register', () => {
   });
 
   it('returns 409 when email already exists', async () => {
-    // First query: existing email lookup returns a row
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'existing' }] });
+    // register uses pool.connect() → client.query():
+    // BEGIN → email check (finds row → ROLLBACK → 409)
+    mockClientQuery
+      .mockResolvedValueOnce({ rows: [] })                    // BEGIN
+      .mockResolvedValueOnce({ rows: [{ id: 'existing' }] }) // email check → found
+      .mockResolvedValueOnce({ rows: [] });                   // ROLLBACK
 
     const res = await request(app)
       .post('/auth/register')
-      .send({ email: 'admin@example.com', password: 'Password1!', company_name: 'Test GmbH' });
+      .send({ email: 'admin@example.com', password: 'Password1!', name: 'Admin', org_name: 'Test GmbH' });
 
     expect([409, 400]).toContain(res.status);
   });
 
   it('returns 201 with token on success', async () => {
-    // email-check → no row; tenant insert → row; user insert → row
-    mockQuery
-      .mockResolvedValueOnce({ rows: [] })                                       // check existing email
-      .mockResolvedValueOnce({ rows: [{ id: 'ten_new', plan: 'free' }] })        // insert tenant
-      .mockResolvedValueOnce({ rows: [{ id: 'usr_new', email: 'new@example.com', role: 'admin', plan: 'free', tenant_id: 'ten_new' }] }); // insert user
+    // auth/register uses pool.connect() transaction:
+    //   BEGIN → email check → tenant insert → user insert → audit → COMMIT
+    mockClientQuery
+      .mockResolvedValueOnce({ rows: [] })          // BEGIN
+      .mockResolvedValueOnce({ rows: [] })          // check existing email → not found
+      .mockResolvedValueOnce({ rows: [{ id: 'ten_new', plan: 'free', name: 'New GmbH' }] }) // tenant insert
+      .mockResolvedValueOnce({ rows: [{ id: 'usr_new', email: 'new@example.com', role: 'owner', plan: 'free', tenant_id: 'ten_new' }] }) // user insert
+      .mockResolvedValueOnce({ rows: [] })          // audit log insert (optional)
+      .mockResolvedValueOnce({ rows: [] });         // COMMIT
 
     const res = await request(app)
       .post('/auth/register')
-      .send({ email: 'new@example.com', password: 'Password1!', company_name: 'New GmbH' });
+      .send({ email: 'new@example.com', password: 'Password1!', name: 'Max Müller', org_name: 'New GmbH' });
 
     expect([200, 201]).toContain(res.status);
     if (res.status === 201 || res.status === 200) {
@@ -170,6 +187,9 @@ describe('POST /auth/refresh', () => {
   });
 
   it('returns 401 with invalid refresh token', async () => {
+    // pool.query for token lookup → empty rows = token not found → 401
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
     const res = await request(app)
       .post('/auth/refresh')
       .send({ refresh_token: 'invalid.token.here' });

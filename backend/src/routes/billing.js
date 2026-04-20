@@ -10,18 +10,9 @@
 
 const express = require('express');
 const router = express.Router();
-const Stripe = require('stripe');
-const db = require('../db'); // Pool-Instanz (pg / knex o.ä.)
+const stripe = require('../config/stripe');
+const db = require('../db');
 const { PLANS, getUpgradeUrl } = require('../config/plans');
-
-// Stripe-Client initialisieren
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2024-06-20',
-  appInfo: {
-    name: 'RealSyncDynamics',
-    version: '1.0.0',
-  },
-});
 
 // ---------------------------------------------------------------------------
 // Hilfsfunktionen
