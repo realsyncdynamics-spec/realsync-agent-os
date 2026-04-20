@@ -112,7 +112,6 @@ const STRIPE_SUBSCRIPTION = {
   current_period_end:    Math.floor(Date.now() / 1000) + 86400 * 29,
   cancel_at_period_end:  false,
   cancel_at:             null,
-  current_period_end:    Math.floor(Date.now() / 1000) + 86400 * 29,
   default_payment_method: {
     card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2027 },
   },
