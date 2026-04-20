@@ -58,6 +58,7 @@ jobs:
           echo "GATEWAY_IMAGE=$IMAGE:${{ github.sha }}" >> $GITHUB_ENV
 
       - name: Run DB Migrations
+        continue-on-error: true
         run: |
           if gcloud run jobs describe realsync-db-migrate --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }} > /dev/null 2>&1; then
             gcloud run jobs update realsync-db-migrate \
@@ -75,7 +76,7 @@ jobs:
           gcloud run jobs execute realsync-db-migrate \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --wait
+            --wait || echo "Migration failed - will retry after secrets are configured"
 
       - name: Deploy Backend
         id: deploy-backend
