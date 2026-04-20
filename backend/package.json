@@ -41,6 +41,20 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "testMatch": ["**/__tests__/**/*.js", "**/*.test.js"]
+    "testMatch": ["**/__tests__/**/*.js", "**/*.test.js"],
+    "coverageThreshold": {
+      "global": {
+        "statements": 40,
+        "branches":   35,
+        "functions":  40,
+        "lines":      40
+      }
+    },
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/app.js",
+      "!src/db/migrate.js",
+      "!src/templates/**"
+    ]
   }
 }

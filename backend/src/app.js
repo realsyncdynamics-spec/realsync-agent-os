@@ -105,7 +105,7 @@ app.use('/auth', require('./routes/auth'));
 // Protected API routes
 // ---------------------------------------------------------------------------
 
-const { authenticate }   = require('./middleware/auth');
+const { authenticate }    = require('./middleware/auth');
 const { auditMiddleware } = require('./middleware/audit');
 
 app.use('/api', authenticate);

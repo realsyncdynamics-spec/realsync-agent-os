@@ -10,7 +10,7 @@
 
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { OpenClawClient, OpenClawError } = require('./openclaw-client');
+const { OpenClawClient, OpenClawError } = require('../openclaw-client');
 
 const router = express.Router();
 
@@ -374,7 +374,8 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createApp, router };
+module.exports = router;
+// Legacy: module.exports.createApp = createApp;
 
 // ─── Example curl ─────────────────────────────────────────────────────────────
 /*

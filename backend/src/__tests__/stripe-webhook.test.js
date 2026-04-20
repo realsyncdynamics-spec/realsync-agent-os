@@ -53,6 +53,7 @@ jest.mock('ioredis', () => {
 });
 
 jest.mock('../middleware/auth', () => ({
+  authenticate: (_req, _res, next) => next(),
   authenticateToken: (_req, _res, next) => next(),
 }));
 

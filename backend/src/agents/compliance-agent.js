@@ -35,7 +35,14 @@ const logger = winston.createLogger({
 
 // ─── OpenAI Client ────────────────────────────────────────────────────────────
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Lazy init: avoids crash when OPENAI_API_KEY is absent in test/CI environments
+let _openai = null;
+function getOpenAI() {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'sk-placeholder' });
+  }
+  return _openai;
+}
 
 // ─── Risk Tier Definitions (EU AI Act Annex III) ──────────────────────────────
 
@@ -141,7 +148,7 @@ Respond with JSON only:
   "recommendations": ["...", "..."]
 }`.trim();
 
-        const completion = await openai.chat.completions.create({
+        const completion = await getOpenAI().chat.completions.create({
           model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
           response_format: { type: 'json_object' },
@@ -195,7 +202,7 @@ Respond with JSON only:
   "human_oversight_coverage": "percentage or description"
 }`.trim();
 
-        const completion = await openai.chat.completions.create({
+        const completion = await getOpenAI().chat.completions.create({
           model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
           response_format: { type: 'json_object' },
@@ -379,7 +386,7 @@ Respond with JSON only:
   "relevant_article": "..."
 }`.trim();
 
-          const completion = await openai.chat.completions.create({
+          const completion = await getOpenAI().chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [{ role: 'user', content: prompt }],
             response_format: { type: 'json_object' },

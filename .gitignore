@@ -1,1 +1,52 @@
+# ─── Secrets & Environment ───────────────────────────────────────────────────
 generated_secrets.env
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+service-account*.json
+gcp-key*.json
+
+# ─── Node.js ─────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# ─── Build & Coverage ────────────────────────────────────────────────────────
+dist/
+build/
+coverage/
+*.lcov
+.nyc_output/
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+server.log
+
+# ─── OS / Editor ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Terraform ───────────────────────────────────────────────────────────────
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+terraform/crash.log
+
+# ─── Docker ──────────────────────────────────────────────────────────────────
+.docker/
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+tmp/
+.tmp/

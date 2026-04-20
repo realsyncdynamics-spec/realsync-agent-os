@@ -31,7 +31,14 @@ const logger = winston.createLogger({
 
 // ─── OpenAI Client ────────────────────────────────────────────────────────────
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Lazy init: avoids crash when OPENAI_API_KEY is absent in test/CI environments
+let _openai = null;
+function getOpenAI() {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'sk-placeholder' });
+  }
+  return _openai;
+}
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -220,7 +227,7 @@ async function summarizeMarket({ task_id, workflow_id, tenant_id, params }) {
 
   const start = Date.now();
   const completion = await withRetry(() =>
-    openai.chat.completions.create({
+    getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       response_format: { type: 'json_object' },
       messages: [
@@ -289,7 +296,7 @@ async function generateSurvey({ task_id, workflow_id, tenant_id, params }) {
 
   const start = Date.now();
   const completion = await withRetry(() =>
-    openai.chat.completions.create({
+    getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       response_format: { type: 'json_object' },
       messages: [
@@ -392,7 +399,7 @@ async function analyzeCompetitor({ task_id, workflow_id, tenant_id, params }) {
 
   const llmStart = Date.now();
   const completion = await withRetry(() =>
-    openai.chat.completions.create({
+    getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       response_format: { type: 'json_object' },
       messages: [

@@ -176,4 +176,7 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { authMiddleware, requireRole };
+// Alias for backward compatibility with route tests and app.js
+const authenticate = authMiddleware;
+
+module.exports = { authMiddleware, authenticate, requireRole };

@@ -51,6 +51,13 @@ jest.mock('../ai-manager', () => ({
 
 // ── Auth mock ─────────────────────────────────────────────────────────────────
 jest.mock('../middleware/auth', () => ({
+  authenticate: (req, _res, next) => {
+    req.user      = { id: 'user-001', email: 'test@realsync.io', role: 'admin' };
+    req.tenant_id = 'ten_test_001';
+    req.user_id   = 'usr_test_001';
+    req.user_role = 'admin';
+    next();
+  },
   authenticateToken: (req, _res, next) => {
     req.tenant_id = 'ten_test_001';
     req.user      = { id: 'usr_test_001' };
