@@ -24,6 +24,7 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,7 +77,7 @@ jobs:
           gcloud run jobs execute realsync-db-migrate \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --wait || echo "Migration skipped - add DB secret to Secret Manager first"
+            --wait || echo "Migration skipped"
 
       - name: Deploy Backend
         id: deploy-backend
@@ -88,6 +89,16 @@ jobs:
           env_vars: |
             NODE_ENV=production
             ENABLE_WORKERS=true
+          secrets: |
+            DATABASE_URL=DATABASE_URL:latest
+            REDIS_URL=REDIS_URL:latest
+            JWT_SECRET=JWT_SECRET:latest
+            JWT_REFRESH_SECRET=JWT_REFRESH_SECRET:latest
+            OPENAI_API_KEY=OPENAI_API_KEY:latest
+            STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest
+            STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest
+            OPENCLAW_API_KEY=OPENCLAW_API_KEY:latest
+            GATEWAY_SECRET=GATEWAY_SECRET:latest
           flags: >-
             --allow-unauthenticated
             --memory=512Mi
