@@ -11,7 +11,9 @@
     "dev": "nodemon src/app.js",
     "lint": "eslint src/ --ext .js --max-warnings 20",
     "test": "jest --forceExit --detectOpenHandles --passWithNoTests",
-    "test:ci": "jest --forceExit --detectOpenHandles --ci --coverage --passWithNoTests"
+    "test:ci": "jest --forceExit --detectOpenHandles --ci --coverage --passWithNoTests",
+    "migrate": "node src/db/migrate.js",
+    "db:init": "node src/db/index.js"
   },
   "dependencies": {
     "axios": "^1.7.7",
