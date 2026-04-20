@@ -1,86 +1,241 @@
+# ============================================================
+# RealSync Agent-OS — CI Pipeline v2
+# Sprint 12: npm ci, coverage, cache, coverage-summary comment
+# ============================================================
 name: CI
+
 on:
   push:
     branches: ['**']
   pull_request:
     branches: [main]
+
 jobs:
+  # ────────────────────────────────────────────────────────────
+  # 1. Lint + Test + Coverage
+  # ────────────────────────────────────────────────────────────
   backend:
-    name: Backend Lint and Test
+    name: Backend Lint & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install dependencies
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies (reproducible)
         working-directory: backend
-        run: npm install
+        run: npm ci
+
       - name: Lint
         working-directory: backend
         run: npm run lint --if-present
         continue-on-error: true
-      - name: Unit tests
+
+      - name: Unit tests with coverage
         working-directory: backend
-        run: npm test --if-present
+        run: npm run test:ci
+        env:
+          NODE_ENV: test
+          JWT_SECRET: ci_jwt_secret_32_chars_minimum_xx
+          JWT_REFRESH_SECRET: ci_refresh_secret_32_chars_miny
+          AGENT_INTERNAL_KEY: ci_agent_key_16ch
+          GATEWAY_SECRET: ci_gateway_secret
+          INTERNAL_HEALTH_KEY: ci_health_key_secret
+          REDIS_URL: redis://localhost:6379
+          DATABASE_URL: postgresql://x:x@localhost/x
+          ENABLE_WORKERS: 'false'
+          STRIPE_SECRET_KEY: sk_test_placeholder_for_ci_only
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: backend/coverage/
+          retention-days: 14
+
+      - name: Coverage summary
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
+            echo "| Category | % Statements | % Branches | % Functions | % Lines |" >> $GITHUB_STEP_SUMMARY
+            echo "|---|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+            node -e "
+              const s = require('./coverage/coverage-summary.json').total;
+              const row = (cat, d) =>
+                '| ' + cat + ' | ' + d.statements.pct + '% | ' + d.branches.pct + '% | ' +
+                d.functions.pct + '% | ' + d.lines.pct + '% |';
+              console.log(row('Total', s));
+            " >> $GITHUB_STEP_SUMMARY || true
+          else
+            echo "Coverage summary not available." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ────────────────────────────────────────────────────────────
+  # 2. Docker Build Check
+  # ────────────────────────────────────────────────────────────
   docker-build:
     name: Docker Build Check
     runs-on: ubuntu-latest
     needs: backend
     steps:
       - uses: actions/checkout@v4
-      - name: Build backend image
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image (multi-stage)
         run: |
-          docker build --tag realsync-backend:ci ./backend
+          docker build \
+            --target production \
+            --tag realsync-backend:ci \
+            --cache-from type=gha \
+            --cache-to   type=gha,mode=max \
+            ./backend
           echo "Backend image built"
+
       - name: Build gateway image
         run: |
-          docker build --tag realsync-gateway:ci ./gateway
+          docker build \
+            --tag realsync-gateway:ci \
+            --cache-from type=gha \
+            --cache-to   type=gha,mode=max \
+            ./gateway
           echo "Gateway image built"
+
+      - name: Container smoke test (no DB required)
+        run: |
+          CID=$(docker run -d \
+            -e NODE_ENV=test \
+            -e PORT=8080 \
+            -e JWT_SECRET="ci_jwt_secret_32_chars_minimum_xx" \
+            -e JWT_REFRESH_SECRET="ci_refresh_32chars_minimum_yyyyyy" \
+            -e AGENT_INTERNAL_KEY="ci_agent_key_xxx" \
+            -e GATEWAY_SECRET="ci_gateway_secret" \
+            -e INTERNAL_HEALTH_KEY="ci_health_key" \
+            -e REDIS_URL="redis://localhost:6379" \
+            -e DATABASE_URL="postgresql://x:x@localhost/x" \
+            -e ENABLE_WORKERS="false" \
+            -p 18080:8080 \
+            realsync-backend:ci)
+          sleep 6
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:18080/health || echo "000")
+          docker stop $CID > /dev/null 2>&1 || true
+          echo "Health check HTTP status: $STATUS"
+          [ "$STATUS" = "200" ]
+
+  # ────────────────────────────────────────────────────────────
+  # 3. Playbook JSON Validation
+  # ────────────────────────────────────────────────────────────
   validate-playbooks:
-    name: Playbook JSON Validation
+    name: Playbook Validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate playbook JSON files
+
+      - name: Validate playbook JSON
         run: |
           FAIL=0
           for f in playbooks/*.json; do
-            if python3 -c "import json; json.load(open('$f'))" 2>/dev/null; then
-              echo "OK: $f"
+            if python3 -c "
+              import json, sys
+              data = json.load(open('$f'))
+              assert 'name'  in data, 'Missing name'
+              assert 'steps' in data, 'Missing steps'
+              assert isinstance(data['steps'], list), 'Steps must be array'
+              assert len(data['steps']) > 0, 'Steps cannot be empty'
+            " 2>/dev/null; then
+              echo "OK: $f ($(python3 -c "import json; print(len(json.load(open('$f'))['steps']))" ) steps)"
             else
               echo "FAIL: $f"
               FAIL=1
             fi
           done
           exit $FAIL
+
+      - name: EU AI Act field check
+        run: |
+          # Verify key EU AI Act fields are present in at least one playbook
+          python3 -c "
+            import json, os, sys
+            playbooks = [f for f in os.listdir('playbooks') if f.endswith('.json')]
+            for pb in playbooks:
+                data = json.load(open(f'playbooks/{pb}'))
+                steps = data.get('steps', [])
+                for step in steps:
+                    if step.get('type') == 'ai_action':
+                        assert 'human_approval_required' in step or 'risk_level' in step, \
+                            f'{pb}: ai_action step missing human_approval_required or risk_level'
+            print(f'EU AI Act check passed for {len(playbooks)} playbook(s)')
+          "
+
+  # ────────────────────────────────────────────────────────────
+  # 4. Security Audit
+  # ────────────────────────────────────────────────────────────
   security:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
       - name: Install dependencies
         working-directory: backend
-        run: npm install
-      - name: npm audit
+        run: npm ci
+
+      - name: npm audit (high severity)
         working-directory: backend
         run: npm audit --audit-level=high
         continue-on-error: true
+
+      - name: Check for leaked secrets in source
+        run: |
+          FAIL=0
+          PATTERNS=("sk_live_" "whsec_[a-zA-Z0-9]{20}" "AKIA[0-9A-Z]{16}")
+          for pattern in "${PATTERNS[@]}"; do
+            if grep -rE "$pattern" backend/src/ gateway/src/ 2>/dev/null | \
+               grep -v "node_modules\|\.example\|placeholder\|test"; then
+              echo "FAIL: Potential secret pattern found: $pattern"
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+
+  # ────────────────────────────────────────────────────────────
+  # 5. CI Summary
+  # ────────────────────────────────────────────────────────────
   ci-summary:
     name: CI Complete
     runs-on: ubuntu-latest
     needs: [backend, docker-build, validate-playbooks, security]
     if: always()
     steps:
-      - name: Summary
+      - name: Write summary
         run: |
-          echo "Backend: ${{ needs.backend.result }}"
-          echo "Docker: ${{ needs.docker-build.result }}"
-          echo "Playbooks: ${{ needs.validate-playbooks.result }}"
-          echo "Security: ${{ needs.security.result }}"
+          echo "## CI Results — Sprint 12" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend Lint & Test | ${{ needs.backend.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Playbook Validation | ${{ needs.validate-playbooks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Audit | ${{ needs.security.result }} |" >> $GITHUB_STEP_SUMMARY
+
       - name: Fail if critical jobs failed
-        if: needs.backend.result == 'failure' || needs.docker-build.result == 'failure'
-        run: exit 1
+        if: |
+          needs.backend.result == 'failure' ||
+          needs.docker-build.result == 'failure' ||
+          needs.validate-playbooks.result == 'failure'
+        run: |
+          echo "Critical CI job failed — blocking merge."
+          exit 1
