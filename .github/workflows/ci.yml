@@ -95,7 +95,7 @@ jobs:
       - name: Build backend image (multi-stage)
         run: |
           docker build \
-            --target production \
+            --target runtime \
             --tag realsync-backend:ci \
             --cache-from type=gha \
             --cache-to   type=gha,mode=max \
