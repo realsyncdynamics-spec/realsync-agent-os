@@ -145,15 +145,33 @@ jobs:
         run: |
           FAIL=0
           for f in playbooks/*.json; do
-            if python3 -c "
-              import json, sys
-              data = json.load(open('$f'))
-              assert 'name'  in data, 'Missing name'
-              assert 'steps' in data, 'Missing steps'
-              assert isinstance(data['steps'], list), 'Steps must be array'
-              assert len(data['steps']) > 0, 'Steps cannot be empty'
-            " 2>/dev/null; then
-              echo "OK: $f ($(python3 -c "import json; print(len(json.load(open('$f'))['steps']))" ) steps)"
+            # Write validator to a temp file to avoid Python IndentationError from YAML indentation
+            python3 - <<'PYEOF'
+import json, sys, os
+f = os.environ.get('PLAYBOOK_FILE', '')
+if not f:
+    sys.exit(1)
+data = json.load(open(f))
+assert 'name'  in data, 'Missing name'
+assert 'steps' in data, 'Missing steps'
+assert isinstance(data['steps'], list), 'Steps must be array'
+assert len(data['steps']) > 0, 'Steps cannot be empty'
+PYEOF
+            PYEOF_EXIT=$?
+            # Re-run with PLAYBOOK_FILE set
+            PLAYBOOK_FILE="$f" python3 - <<'PYEOF2'
+import json, sys, os
+f = os.environ.get('PLAYBOOK_FILE', '')
+if not f: sys.exit(1)
+data = json.load(open(f))
+assert 'name'  in data, 'Missing name'
+assert 'steps' in data, 'Missing steps'
+assert isinstance(data['steps'], list), 'Steps must be array'
+assert len(data['steps']) > 0, 'Steps cannot be empty'
+PYEOF2
+            if [ $? -eq 0 ]; then
+              STEP_COUNT=$(PLAYBOOK_FILE="$f" python3 -c "import json,os; print(len(json.load(open(os.environ['PLAYBOOK_FILE']))['steps']))")
+              echo "OK: $f ($STEP_COUNT steps)"
             else
               echo "FAIL: $f"
               FAIL=1
@@ -164,18 +182,18 @@ jobs:
       - name: EU AI Act field check
         run: |
           # Verify key EU AI Act fields are present in at least one playbook
-          python3 -c "
-            import json, os, sys
-            playbooks = [f for f in os.listdir('playbooks') if f.endswith('.json')]
-            for pb in playbooks:
-                data = json.load(open(f'playbooks/{pb}'))
-                steps = data.get('steps', [])
-                for step in steps:
-                    if step.get('type') == 'ai_action':
-                        assert 'human_approval_required' in step or 'risk_level' in step, \
-                            f'{pb}: ai_action step missing human_approval_required or risk_level'
-            print(f'EU AI Act check passed for {len(playbooks)} playbook(s)')
-          "
+          python3 - <<'PYEOF'
+import json, os, sys
+playbooks = [f for f in os.listdir('playbooks') if f.endswith('.json')]
+for pb in playbooks:
+    data = json.load(open(f'playbooks/{pb}'))
+    steps = data.get('steps', [])
+    for step in steps:
+        if step.get('type') == 'ai_action':
+            assert 'human_approval_required' in step or 'risk_level' in step, \
+                f'{pb}: ai_action step missing human_approval_required or risk_level'
+print(f'EU AI Act check passed for {len(playbooks)} playbook(s)')
+PYEOF
 
   # ────────────────────────────────────────────────────────────
   # 4. Security Audit
