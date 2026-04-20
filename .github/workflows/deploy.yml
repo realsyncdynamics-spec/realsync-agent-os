@@ -24,7 +24,6 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,10 +59,19 @@ jobs:
 
       - name: Run DB Migrations
         run: |
-          gcloud run jobs update realsync-db-migrate \
-            --image ${{ env.BACKEND_IMAGE }} \
-            --region ${{ env.REGION }} \
-            --project ${{ env.PROJECT_ID }}
+          if gcloud run jobs describe realsync-db-migrate --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }} > /dev/null 2>&1; then
+            gcloud run jobs update realsync-db-migrate \
+              --image ${{ env.BACKEND_IMAGE }} \
+              --region ${{ env.REGION }} \
+              --project ${{ env.PROJECT_ID }}
+          else
+            gcloud run jobs create realsync-db-migrate \
+              --image ${{ env.BACKEND_IMAGE }} \
+              --region ${{ env.REGION }} \
+              --project ${{ env.PROJECT_ID }} \
+              --command npm \
+              --args "run,migrate"
+          fi
           gcloud run jobs execute realsync-db-migrate \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
