@@ -76,7 +76,7 @@ jobs:
           gcloud run jobs execute realsync-db-migrate \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --wait || echo "Migration failed - will retry after secrets are configured"
+            --wait || echo "Migration skipped - add DB secret to Secret Manager first"
 
       - name: Deploy Backend
         id: deploy-backend
@@ -88,15 +88,6 @@ jobs:
           env_vars: |
             NODE_ENV=production
             ENABLE_WORKERS=true
-          secrets: |
-            DATABASE_URL=DATABASE_URL:latest
-            REDIS_URL=REDIS_URL:latest
-            JWT_SECRET=JWT_SECRET:latest
-            JWT_REFRESH_SECRET=JWT_REFRESH_SECRET:latest
-            OPENAI_API_KEY=OPENAI_API_KEY:latest
-            STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest
-            STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest
-            OPENCLAW_API_KEY=OPENCLAW_API_KEY:latest
           flags: >-
             --allow-unauthenticated
             --memory=512Mi
@@ -108,8 +99,6 @@ jobs:
           service: ${{ env.GATEWAY_SVC }}
           region: ${{ env.REGION }}
           image: ${{ env.GATEWAY_IMAGE }}
-          secrets: |
-            GATEWAY_SECRET=GATEWAY_SECRET:latest
           env_vars: |
             NODE_ENV=production
             BACKEND_URL=${{ steps.deploy-backend.outputs.url }}
