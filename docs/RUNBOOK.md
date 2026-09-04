@@ -9,8 +9,8 @@
 
 | Dienst | URL | Logs |
 |---|---|---|
-| Backend | `gcloud run services describe realsync-backend --region europe-west1 --format 'value(status.url)'` | `gcloud run services logs tail realsync-backend --region europe-west1` |
-| Gateway | `gcloud run services describe realsync-gateway --region europe-west1 --format 'value(status.url)'` | `gcloud run services logs tail realsync-gateway --region europe-west1` |
+| Backend | https://realsync-backend-285969423992.europe-west1.run.app | `gcloud run services logs tail realsync-backend --region europe-west1` |
+| Gateway | https://realsync-gateway-285969423992.europe-west1.run.app | `gcloud run services logs tail realsync-gateway --region europe-west1` |
 | Monitoring | [GCP Alerting](https://console.cloud.google.com/monitoring/alerting) | — |
 | GitHub Actions | [Actions](https://github.com/realsyncdynamics-spec/realsync-agent-os/actions) | — |
 

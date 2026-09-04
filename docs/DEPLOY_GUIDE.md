@@ -51,7 +51,16 @@ bash scripts/bootstrap_deploy.sh
 
 ### Schritt 5 — Post-Deploy-Verifikation (Pflicht)
 
-Ein grüner Workflow allein reicht nicht — die Services müssen live getestet werden. Die `*.run.app`-URLs stehen nur in den Workflow-Logs (Retention ~90 Tage), danach sind sie nur noch per `gcloud` ermittelbar:
+Ein grüner Workflow allein reicht nicht — die Services müssen live getestet werden.
+
+**Service-URLs (deterministisch, Projektnummer `285969423992`):**
+
+| Service | URL |
+|---|---|
+| Backend | `https://realsync-backend-285969423992.europe-west1.run.app` |
+| Gateway | `https://realsync-gateway-285969423992.europe-west1.run.app` |
+
+Cloud Run vergibt diese URLs nach dem Muster `<service>-<projektnummer>.<region>.run.app` — sie sind stabil über Deployments hinweg. Alternativ per `gcloud` ermitteln (die Workflow-Logs haben nur ~90 Tage Retention):
 
 ```bash
 export BACKEND_URL=$(gcloud run services describe realsync-backend \
@@ -100,6 +109,22 @@ Falls der erste Run nach der Umstellung fehlschlägt:
 
 ### "Permission denied on Artifact Registry"
 Der Service Account braucht die Rolle `roles/artifactregistry.writer`. Das Bootstrap-Script setzt dies automatisch, erfordert aber `Owner` oder `Security Admin` Rechte beim Ausführenden.
+
+### "denied: This API method requires billing to be enabled"
+Der Docker-Push nach Artifact Registry bricht ab mit:
+> `denied: This API method requires billing to be enabled. Please enable billing on project #285969423992`
+
+**Ursache:** Die Rechnungsstellung des GCP-Projekts ist deaktiviert (abgelaufene Karte, Budget-Stopp, Testguthaben erschöpft). Das betrifft nicht nur den Deploy — **auch die bereits laufenden Cloud-Run-Services stellen den Dienst ein.**
+
+**Symptom-Check ohne `gcloud`:** Die Service-URLs liefern HTTP 500/503 (Googles generische Fehlerseite, nicht die App). Zur Abgrenzung: ein *nicht existierender* Service liefert unter demselben URL-Muster 404. 503 statt 404 heißt also „Service existiert, kann aber nicht ausliefern" — typisch für gestopptes Billing.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  https://realsync-backend-285969423992.europe-west1.run.app/health
+# 200 = gesund | 500/503 = Billing/Serving-Problem | 404 = Service existiert nicht
+```
+
+**Behebung:** Billing im [GCP-Console-Billing](https://console.developers.google.com/billing/enable?project=285969423992) reaktivieren, einige Minuten auf Propagierung warten, dann den fehlgeschlagenen Deploy-Run über die Actions-UI neu starten (*Re-run failed jobs*) und mit `scripts/smoke_test.sh` verifizieren.
 
 ### "workflow_dispatch: 403 Resource not accessible by integration"
 Der Deploy-Workflow lässt sich per GitHub App / Automation nur triggern, wenn die App die Berechtigung **Actions: Read and write** besitzt. In den Organisations-Einstellungen der GitHub App ergänzen — oder den Run manuell über die Actions-UI starten (`Deploy to Cloud Run` → *Run workflow*).
