@@ -87,14 +87,14 @@ function generateRefreshToken() {
  * Persist a new refresh token row.
  *
  * SQL (for reference):
- *   INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent)
+ *   INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip_address, user_agent)
  *   VALUES ($1, $2, $3, $4, $5)
  *   RETURNING id;
  */
 async function storeRefreshToken(client, { userId, tokenHash, ip, userAgent }) {
   const expiresAt = new Date(Date.now() + REFRESH_TTL_MS);
   const result = await client.query(
-    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent)
+    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip_address, user_agent)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
     [userId, tokenHash, expiresAt, ip || null, userAgent || null]
