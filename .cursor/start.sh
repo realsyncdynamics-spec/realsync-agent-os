@@ -10,6 +10,17 @@ DB_USER="realsync"
 DB_PASS="realsync_local_secret"
 DB_NAME="realsync_dev"
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# With prebuilt environment builds the pod boots with a fresh git checkout, which
+# wipes the untracked node_modules that the install phase created inside the tree.
+# Restore them per boot (idempotent: skipped when already present) so migrations
+# and the dev terminals can run.
+echo "── Ensuring Node dependencies ──"
+[ -d backend/node_modules ] || ( cd backend && npm ci )
+[ -d gateway/node_modules ] || ( cd gateway && npm ci )
+
 echo "── Starting PostgreSQL 16 ──"
 sudo pg_ctlcluster 16 main start 2>/dev/null || true
 for _ in $(seq 1 30); do
