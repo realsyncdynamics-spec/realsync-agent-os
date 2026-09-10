@@ -11,7 +11,7 @@
 
 const { Worker } = require('bullmq');
 const winston  = require('winston');
-const pool     = require('../../db');
+const pool     = require('../db');
 
 // ---------------------------------------------------------------------------
 // Logger

@@ -45,9 +45,14 @@ pool.on('error', (err) => {
  * const result = await query('SELECT * FROM tenants WHERE id = $1', [tenantId]);
  * const tenant = result.rows[0];
  */
+// Capture the native pooled query BEFORE it is shadowed on module.exports below.
+// `module.exports = pool` followed by `module.exports.query = query` would
+// otherwise overwrite `pool.query` with this wrapper, causing infinite recursion.
+const nativeQuery = pool.query.bind(pool);
+
 async function query(text, params) {
   const start  = Date.now();
-  const result = await pool.query(text, params);
+  const result = await nativeQuery(text, params);
   const duration = Date.now() - start;
 
   if (process.env.NODE_ENV !== 'production' && duration > 1000) {

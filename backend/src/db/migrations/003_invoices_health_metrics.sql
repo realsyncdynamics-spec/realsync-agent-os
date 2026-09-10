@@ -86,7 +86,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS health_metrics (
   id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id         UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  gateway_id        UUID        REFERENCES gateways(id) ON DELETE SET NULL,
+  gateway_id        UUID        REFERENCES openclaw_gateways(id) ON DELETE SET NULL,
   workflow_run_id   UUID,
 
   -- Metric identity
