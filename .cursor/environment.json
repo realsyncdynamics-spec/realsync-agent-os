@@ -1,0 +1,22 @@
+{
+  "name": "RealSync Agent-OS",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "description": "RealSync backend API (Express + BullMQ workers) on http://localhost:8080",
+      "command": "cd backend && NODE_ENV=development PORT=8080 DATABASE_URL=\"postgresql://realsync:realsync_local_secret@localhost:5432/realsync_dev\" REDIS_URL=\"redis://127.0.0.1:6379\" JWT_SECRET=\"local_dev_jwt_secret_change_in_production_min32\" JWT_REFRESH_SECRET=\"local_dev_refresh_secret_change_in_production_min32\" AGENT_INTERNAL_KEY=\"local_dev_agent_key\" GATEWAY_SECRET=\"local_dev_gateway_secret\" INTERNAL_HEALTH_KEY=\"local_dev_health_key\" ENABLE_WORKERS=\"true\" LOG_LEVEL=\"info\" OPENCLAW_URL=\"http://127.0.0.1:8443\" COMPANY_NAME=\"RealSync Dynamics\" APP_URL=\"http://localhost:8080\" npm run dev"
+    },
+    {
+      "name": "gateway",
+      "description": "OpenClaw gateway (Express + WebSocket remote execution) on http://localhost:8443",
+      "command": "cd gateway && NODE_ENV=development PORT=8443 GATEWAY_API_KEY=\"local_dev_gateway_api_key_min_32_chars_xx\" GATEWAY_ID=\"gateway-dev-01\" BACKEND_URL=\"http://127.0.0.1:8080\" AGENT_INTERNAL_KEY=\"local_dev_agent_key\" REDIS_URL=\"redis://127.0.0.1:6379\" LOG_LEVEL=\"info\" npm run dev"
+    }
+  ],
+  "ports": [
+    { "name": "backend", "port": 8080 },
+    { "name": "gateway", "port": 8443 }
+  ]
+}
