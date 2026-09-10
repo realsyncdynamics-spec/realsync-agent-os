@@ -18,6 +18,10 @@ const pool = new Pool({
   connectionTimeoutMillis: 5_000,                                   // Verbindungs-Timeout: 5s
 });
 
+// Native pg Pool.query, captured before module.exports.query overrides pool.query.
+// The query() wrapper below must call this to avoid recursing into itself.
+const nativeQuery = pool.query.bind(pool);
+
 // ─── Pool-Events ──────────────────────────────────────────────────────────────
 pool.on('connect', (client) => {
   // Row Level Security: Tenant-ID für jede neue Verbindung setzen
@@ -47,7 +51,7 @@ pool.on('error', (err) => {
  */
 async function query(text, params) {
   const start  = Date.now();
-  const result = await pool.query(text, params);
+  const result = await nativeQuery(text, params);
   const duration = Date.now() - start;
 
   if (process.env.NODE_ENV !== 'production' && duration > 1000) {
