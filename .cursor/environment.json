@@ -1,0 +1,22 @@
+{
+  "name": "RealSync Agent-OS",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "cd backend && npm run dev",
+      "description": "Express API (Auth, Workflows, Approvals, Audit, Agents) + BullMQ workers on http://localhost:8080"
+    },
+    {
+      "name": "gateway",
+      "command": "cd gateway && npm start",
+      "description": "OpenClaw Gateway (remote script execution + WebSocket) on http://localhost:8443"
+    }
+  ],
+  "ports": [
+    { "name": "backend", "port": 8080 },
+    { "name": "gateway", "port": 8443 }
+  ]
+}
