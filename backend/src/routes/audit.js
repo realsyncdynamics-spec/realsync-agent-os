@@ -6,18 +6,23 @@
  * Provides paginated, filtered, exportable access to the audit_logs table.
  * All queries are fully parameterized — no string interpolation.
  *
- * audit_logs schema reference:
+ * audit_logs schema reference (see backend/src/db/schema.sql):
  *   id          UUID PRIMARY KEY DEFAULT gen_random_uuid()
  *   tenant_id   UUID NOT NULL REFERENCES tenants(id)
  *   user_id     UUID REFERENCES users(id)
  *   action      TEXT NOT NULL
- *   resource    TEXT
- *   resource_id UUID
- *   details     JSONB DEFAULT '{}'
- *   ip_address  TEXT
+ *   entity_type TEXT NOT NULL           -- legacy API alias: "resource"
+ *   entity_id   UUID                    -- legacy API alias: "resource_id"
+ *   before      JSONB                   -- pre-mutation state
+ *   after       JSONB                   -- post-mutation state
+ *   ip          TEXT                    -- legacy API alias: "ip_address"
  *   user_agent  TEXT
- *   status      TEXT
+ *   session_id  VARCHAR(255)
+ *   risk_score  SMALLINT
  *   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ *
+ * Responses keep the legacy field names (resource, resource_id, ip_address)
+ * as aliases alongside the real columns for backward compatibility.
  */
 
 const express = require('express');
@@ -81,14 +86,11 @@ function buildAuditFilters(query, tenantId, startIdx = 2) {
     params.push(query.user_id);
   }
 
-  if (query.resource) {
-    conditions.push(`al.resource = $${idx++}`);
-    params.push(query.resource);
-  }
-
-  if (query.status) {
-    conditions.push(`al.status = $${idx++}`);
-    params.push(query.status);
+  // Accept the real column name (entity_type) and the legacy alias (resource).
+  const entityType = query.entity_type || query.resource;
+  if (entityType) {
+    conditions.push(`al.entity_type = $${idx++}`);
+    params.push(entityType);
   }
 
   if (query.from) {
@@ -130,10 +132,13 @@ router.get('/', async (req, res) => {
 
   const dataSql = `
     SELECT
-      al.id, al.action, al.resource, al.resource_id,
-      al.details, al.ip_address, al.user_agent,
-      al.status, al.created_at,
-      al.user_id, u.email AS user_email, u.name AS user_name
+      al.id, al.action,
+      al.entity_type, al.entity_id,
+      al.entity_type AS resource, al.entity_id AS resource_id,
+      al.before, al.after,
+      al.ip, al.ip AS ip_address, al.user_agent,
+      al.session_id, al.risk_score, al.created_at,
+      al.user_id, u.email AS user_email, u.display_name AS user_name
     FROM audit_logs al
     LEFT JOIN users u ON u.id = al.user_id
     WHERE ${where}
@@ -247,8 +252,11 @@ router.get('/export', async (req, res) => {
       const batchSql = `
         SELECT
           al.id, al.tenant_id, al.user_id, al.action,
-          al.resource, al.resource_id, al.details,
-          al.ip_address, al.user_agent, al.status, al.created_at
+          al.entity_type, al.entity_id,
+          al.entity_type AS resource, al.entity_id AS resource_id,
+          al.before, al.after,
+          al.ip, al.ip AS ip_address, al.user_agent,
+          al.session_id, al.risk_score, al.created_at
         FROM audit_logs al
         WHERE ${batchConditions.join(' AND ')}
         ORDER BY al.created_at ASC, al.id ASC
