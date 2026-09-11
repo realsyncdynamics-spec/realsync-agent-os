@@ -78,11 +78,14 @@ function structuredLog(event, payload) {
  * @param {object} client  pg PoolClient (within an ongoing transaction)
  * @param {object} params
  */
-async function writeAuditLog(client, { tenantId, userId, action, resource, resourceId, details, ip, userAgent, status }) {
+async function writeAuditLog(client, { tenantId, userId, action, resource, resourceId, details, ip, userAgent }) {
+  // Matches the live audit_logs schema (schema.sql): entity_type/entity_id +
+  // before/after JSONB + ip/user_agent. The decision context is recorded in
+  // `after`. There is no `resource`/`details`/`status` column.
   const sql = `
     INSERT INTO audit_logs
-      (id, tenant_id, user_id, action, resource, resource_id, details,
-       ip_address, user_agent, status, created_at)
+      (id, tenant_id, user_id, action, entity_type, entity_id, before, after,
+       ip, user_agent, created_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
   `;
   await client.query(sql, [
@@ -92,10 +95,10 @@ async function writeAuditLog(client, { tenantId, userId, action, resource, resou
     action,
     resource,
     resourceId,
+    null,
     JSON.stringify(details),
     ip || null,
     userAgent || null,
-    status,
   ]);
 }
 
@@ -278,14 +281,14 @@ router.get('/:id', async (req, res) => {
   const sql = `
     SELECT
       a.*,
-      rb.email  AS requested_by_email,
-      rb.name   AS requested_by_name,
-      at2.email AS assigned_to_email,
-      at2.name  AS assigned_to_name,
-      db.email  AS decision_by_email,
-      db.name   AS decision_by_name,
-      t.status  AS task_current_status,
-      w.name    AS workflow_name
+      rb.email        AS requested_by_email,
+      rb.display_name AS requested_by_name,
+      at2.email       AS assigned_to_email,
+      at2.display_name AS assigned_to_name,
+      db.email        AS decision_by_email,
+      db.display_name AS decision_by_name,
+      t.status        AS task_current_status,
+      w.title         AS workflow_name
     FROM approvals a
     LEFT JOIN users     rb  ON rb.id  = a.requested_by
     LEFT JOIN users     at2 ON at2.id = a.assigned_to
@@ -328,13 +331,14 @@ router.post('/:id/approve', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // Lock the row to prevent concurrent decisions
+    // Lock the row to prevent concurrent decisions.
+    // NOTE: no JOIN here — FOR UPDATE cannot lock the nullable side of an
+    // outer join, and the linked task_id is already available via approvals.
     const lockSql = `
-      SELECT a.*, t.id AS task_id_check
-      FROM approvals a
-      LEFT JOIN tasks t ON t.id = a.task_id
-      WHERE a.id = $1
-        AND a.tenant_id = $2
+      SELECT *
+      FROM approvals
+      WHERE id = $1
+        AND tenant_id = $2
       FOR UPDATE NOWAIT
     `;
     const lockResult = await client.query(lockSql, [id, tenantId]);
