@@ -138,9 +138,19 @@ function authMiddleware(req, res, next) {
     });
   }
 
+  // Normalise the subject claim: access tokens carry the user id in `sub`,
+  // while routes and audit logging read `req.user.id` / `req.user_id`.
+  // Without this, created_by and audit_logs.user_id are always null,
+  // breaking Prüfpfad attribution (EU AI Act Art. 12/14).
+  if (payload.id == null && payload.sub != null) {
+    payload.id = payload.sub;
+  }
+
   // User und Tenant-ID an Request anhängen
   req.user      = payload;
   req.tenant_id = payload.tenant_id;
+  req.user_id   = payload.id;
+  req.user_role = payload.role;
 
   next();
 }
